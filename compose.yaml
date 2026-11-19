@@ -1,0 +1,40 @@
+# PHP runs in the container. Do not add a local postgres service when app_create reserved hosted Postgres.
+services:
+  web:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      APP_NAME: "Webhook Inspector"
+      APP_ENV: local
+      APP_DEBUG: "false"
+      MANAGED_HOSTING: ${MANAGED_HOSTING:-false}
+      APP_KEY: ${APP_KEY:-}
+      APP_URL: http://127.0.0.1:8080
+      DB_CONNECTION: pgsql
+      DATABASE_URL: ${DATABASE_URL:-}
+      MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:-}
+      UNTASKED_STORAGE_URL: ${UNTASKED_STORAGE_URL:-}
+      UNTASKED_STORAGE_TOKEN: ${UNTASKED_STORAGE_TOKEN:-}
+      UNTASKED_UPLOADS_URL: ${UNTASKED_UPLOADS_URL:-}
+      SESSION_DRIVER: database
+      CACHE_STORE: database
+      QUEUE_CONNECTION: database
+    volumes:
+      - preview-key:/var/lib/webhook-inspector
+      - composer-cache:/tmp/composer
+      - npm-cache:/tmp/npm
+  test:
+    profiles:
+      - test
+    build:
+      context: .
+      target: test
+    environment:
+      APP_ENV: testing
+      DB_CONNECTION: sqlite
+      DB_DATABASE: ":memory:"
+volumes:
+  preview-key:
+  composer-cache:
+  npm-cache:

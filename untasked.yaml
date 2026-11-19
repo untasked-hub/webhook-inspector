@@ -1,0 +1,6 @@
+web:
+  dockerfile: Dockerfile
+  port: 8080
+  health: /up
+secrets:
+  - APP_KEY

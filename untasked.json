@@ -1,0 +1,33 @@
+{
+    "verify": [
+        "docker compose -f compose.yaml config",
+        "docker compose run --rm test php -d pcov.enabled=1 vendor/bin/pest --coverage --min=80 --coverage-text"
+    ],
+    "app": {
+        "blueprint": "laravel-inertia-vue",
+        "versions": {
+            "laravel": "13.0.0",
+            "php": "8.4.0",
+            "vue": "3.5.0",
+            "inertia": "3.0.0",
+            "tailwind": "4.0.0"
+        },
+        "ui_kit": "none",
+        "icon_family": "lucide",
+        "deploy": "Single Fly machine via untasked.yaml; repo webhook-inspector linked to hosted app 01m6ztxwn14yesr13h5jrqnqez. Planner owns release_deploy/promote/publish.",
+        "guides": [
+            {
+                "id": "untasked-deploy-contract",
+                "reviewed_at": "2026-11-08"
+            },
+            {
+                "id": "laravel-deployment",
+                "reviewed_at": "2026-11-08"
+            },
+            {
+                "id": "laravel-migrations",
+                "reviewed_at": "2026-10-28"
+            }
+        ]
+    }
+}

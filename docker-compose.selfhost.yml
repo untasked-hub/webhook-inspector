@@ -1,0 +1,39 @@
+# Standalone local installation; never use these development credentials publicly.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: inspector
+      POSTGRES_PASSWORD: local-development-only
+      POSTGRES_DB: inspector
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inspector"]
+      interval: 5s
+      retries: 20
+  web:
+    build: .
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      APP_NAME: Webhook Inspector
+      APP_ENV: local
+      APP_DEBUG: "false"
+      APP_URL: http://localhost:8080
+      MANAGED_HOSTING: "false"
+      DB_CONNECTION: pgsql
+      DB_SEARCH_PATH: public
+      DATABASE_URL: postgresql://inspector:local-development-only@postgres:5432/inspector
+      MIGRATION_DATABASE_URL: postgresql://inspector:local-development-only@postgres:5432/inspector
+      SESSION_DRIVER: database
+      CACHE_STORE: database
+      QUEUE_CONNECTION: database
+    volumes:
+      - encryption-key:/var/lib/webhook-inspector
+volumes:
+  postgres-data:
+  encryption-key:

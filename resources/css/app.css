@@ -1,0 +1,15 @@
+@import "tailwindcss";
+
+@layer base {
+  html { color-scheme: dark; scroll-behavior: auto; }
+  a, button, input, select, textarea, summary, pre[tabindex] { @apply focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-400; }
+  button, summary { cursor: pointer; }
+  button:disabled { cursor: not-allowed; }
+  input, select, button { min-height: 2.75rem; }
+}
+@layer components {
+  .public-primary { @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-lg bg-emerald-400 px-4 py-2 text-sm font-semibold text-zinc-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-60; }
+  .public-secondary { @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-800; }
+  .footer-link { @apply mt-2 flex min-h-11 items-center text-zinc-400 hover:text-emerald-300; }
+  .public-panel { @apply rounded-xl border border-zinc-800 bg-zinc-900/60 p-5 sm:p-6; }
+}
