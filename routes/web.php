@@ -5,13 +5,15 @@ use App\Http\Controllers\InspectorController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/robots.txt', fn () => response("User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /dashboard\nDisallow: /c/\nSitemap: ".url('/sitemap.xml')."\n", 200, ['Content-Type' => 'text/plain']));
+Route::get('/.well-known/security.txt', fn () => response("Contact: ".url('/security')."\nExpires: ".now()->addYear()->startOfDay()->toIso8601ZuluString()."\nPreferred-Languages: en\nCanonical: ".url('/.well-known/security.txt')."\nPolicy: ".url('/security')."\n", 200, ['Content-Type' => 'text/plain; charset=utf-8']));
 Route::get('/sitemap.xml', function () {
-    $urls = collect(['/', '/pricing', '/docs', '/self-hosting', '/privacy', '/terms'])->map(fn ($path) => '<url><loc>'.htmlspecialchars(url($path), ENT_XML1).'</loc></url>')->implode('');
+    $urls = collect(['/', '/pricing', '/docs', '/self-hosting', '/privacy', '/terms', '/security'])->map(fn ($path) => '<url><loc>'.htmlspecialchars(url($path), ENT_XML1).'</loc></url>')->implode('');
     return response('<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'.$urls.'</urlset>', 200, ['Content-Type' => 'application/xml']);
 });
 Route::get('/', [DashboardController::class, 'home'])->name('home');
+Route::get('/api/health', \App\Http\Controllers\HealthController::class)->middleware('throttle:60,1');
 Route::get('/favicon.ico', fn () => response(file_get_contents(public_path('favicon.svg')), 200, ['Content-Type' => 'image/svg+xml', 'Cache-Control' => 'public, max-age=86400']));
-Route::get('/{slug}', [\App\Http\Controllers\PagesController::class, 'show'])->whereIn('slug', ['pricing', 'docs', 'self-hosting', 'privacy', 'terms']);
+Route::get('/{slug}', [\App\Http\Controllers\PagesController::class, 'show'])->whereIn('slug', ['pricing', 'docs', 'self-hosting', 'privacy', 'terms', 'security']);
 Route::middleware('guest')->group(function () {
     Route::get('/login', [InspectorController::class, 'authPage'])->name('login');
     Route::get('/register', [InspectorController::class, 'authPage']);

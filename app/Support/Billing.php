@@ -9,8 +9,36 @@ class Billing
 {
     public static function enabled(): bool
     {
-        return (bool) config('billing.managed') && (bool) config('billing.secret') && (bool) config('billing.webhook_secret')
-            && collect(config('billing.plans'))->except('free')->every(fn ($p) => !empty($p['stripe_price']));
+        return !in_array(false, self::configurationChecks(), true);
+    }
+
+    /** Local preflight only: never expose provider IDs or secret values. */
+    public static function configurationChecks(): array
+    {
+        $mode = config('billing.stripe_mode');
+        $validMode = in_array($mode, ['test', 'live'], true);
+        $key = (string) config('billing.secret');
+        $checks = [
+            'managed hosting' => (bool) config('billing.managed'),
+            'billing checkout enabled' => (bool) config('billing.checkout_enabled'),
+            'explicit Stripe mode' => $validMode,
+            'API key matches Stripe mode' => $validMode && preg_match('/\A(?:sk|rk)_'.$mode.'_[A-Za-z0-9_]+\z/', $key) === 1,
+            'webhook signing secret format' => preg_match('/\Awhsec_[A-Za-z0-9_]+\z/', (string) config('billing.webhook_secret')) === 1,
+        ];
+        $prices = [];
+        foreach (['developer', 'pro', 'team'] as $plan) {
+            $price = (string) config('billing.plans.'.$plan.'.stripe_price');
+            $checks[$plan.' price format'] = preg_match('/\Aprice_[A-Za-z0-9_]+\z/', $price) === 1;
+            $prices[] = $price;
+        }
+        $checks['distinct price IDs'] = count(array_unique($prices)) === count($prices);
+
+        return $checks;
+    }
+
+    public static function matchesProviderMode(array $object): bool
+    {
+        return ($object['livemode'] ?? null) === (config('billing.stripe_mode') === 'live');
     }
 
     public static function plan(int $userId): string

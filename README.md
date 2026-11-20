@@ -4,7 +4,29 @@ Inspect, debug and replay webhooks. This repository contains the Laravel/Vue sou
 
 **Status: development milestone, not production-ready.** Independent production deployment, provider billing, operational monitoring/backups, concurrency, browser accessibility and security require further end-to-end verification. Draft legal pages are not legal advice. See [implementation notes](IMPLEMENTATION-NOTES.md) for tested and untested behavior.
 
-## Run a preview
+## Self-host locally: capture your first webhook
+
+From the root of a checkout, with Docker running, Compose v2 installed, and `curl` available:
+
+```sh
+docker compose -f docker-compose.selfhost.yml up --build -d
+```
+
+No `.env` setup is needed for this local quickstart: Compose supplies the local database settings and the entrypoint generates an encryption key on first boot. No external database, Stripe account, or cloud credentials are required. Once the containers start, check readiness with `curl --fail http://localhost:8080/up` (expect HTTP 200). Open <http://localhost:8080>, register a local account, then create a project and endpoint. Copy the receiver URL shown in the endpoint panel and send a synthetic event from the same machine:
+
+```sh
+read -r RECEIVER_URL # Paste the receiver URL, then press Enter.
+curl --fail-with-body -i --json '{"event":"quickstart.ping","source":"local-demo"}' "$RECEIVER_URL"
+unset RECEIVER_URL
+```
+
+Open the new request in the inspector and verify that the method is `POST` and the payload contains `quickstart.ping`. The inspector polls for new requests; allow a few seconds. The URL is a bearer capability: keep it out of screenshots, logs, and public issues. Use synthetic data for this exercise.
+
+If the page is unavailable, run `docker compose -f docker-compose.selfhost.yml ps` and `docker compose -f docker-compose.selfhost.yml logs --tail=80 web postgres` locally. Sanitize any logs before sharing. Port 8080 must be free. This setup binds to loopback; external webhook providers cannot reach it.
+
+Stop with `docker compose -f docker-compose.selfhost.yml down`. This preserves both named volumes. **Do not add `-v` unless you want to permanently delete the local database and encryption key.** Keep a secure backup of both for recovery. This quickstart is not an internet-facing production configuration.
+
+## Developer preview with external PostgreSQL
 
 Prerequisites: Docker Compose, an externally provisioned PostgreSQL database with an `app` schema, a runtime role with table DML privileges and a migration role with schema privileges. Set `DATABASE_URL` and `MIGRATION_DATABASE_URL` in your environment using your own credentials; do not commit them. Then:
 
@@ -23,6 +45,21 @@ This Compose file is a preview, **not** a turnkey hardened production deployment
 Bodies, captured headers/query and destination URLs are encrypted at rest. Redaction covers selected credential-like header and query names, not payload bodies or every secret: inspect exports before sharing. Replay preserves method, body, selected headers and sanitized captured query; credential headers and credential-like query parameters are not forwarded. Replay can have external side effects and requires explicit confirmation. Only public IPv4 `http`/`https` destinations on ports 80, 443, 8080 and 8443 are accepted. All IPv4 A answers must pass validation; dual-stack hosts use a validated public IPv4, IPv6-only hosts fail closed, the validated address is pinned at connection, and redirects are disabled. Query-bearing destination URLs are rejected. Review `app/Support/SafeHttp.php` and test in your environment before using with sensitive or untrusted workloads.
 
 History supports combined filters. JSON, NDJSON and cURL exports are limited to at most 100 matching retained captures per response and may contain sensitive payloads; use the history API cursor for older pages. Retention removes expired rows only while the scheduler is healthy. Self-hosted mode includes the core features without a paid subscription. Managed quotas are per account per UTC calendar month. Paid checkout is unavailable until a provider is configured and verified; configuration alone is not proof of a working payment integration.
+
+### Operational checks
+
+`GET /api/health` is a public, unauthenticated readiness probe for load balancers and uptime monitors. It returns only coarse states and no versions, hostnames or error text:
+
+```json
+{"status":"ok","checks":{"database":"ok","worker":"ok","scheduler":"ok"}}
+```
+
+- `status` is `ok` when every check passes, `degraded` when the database answers but a background process is not healthy, and `unavailable` when the database cannot be reached.
+- The response is HTTP `503` only for `unavailable`; a `degraded` state stays `200` so a stalled worker does not cause restart loops that hide the real fault.
+- `worker` and `scheduler` are `ok`, `stale` (last heartbeat older than 3 minutes) or `unknown` (never reported, or the cache store is unreachable). The queue worker writes its heartbeat from its loop and the scheduler writes one each minute, so `unknown` after a few minutes of uptime means the process is not running.
+- Responses are `Cache-Control: no-store`. The endpoint is throttled to 60 requests per minute per client.
+
+Known limitations: heartbeats live in the configured cache store, so a Redis outage reports `unknown` for both processes even when they run; the probe does not verify the Stripe, object-storage or outbound-forwarding dependencies; `/up` remains the container health check and only confirms the web process is serving.
 
 ### Conditional forwarding and destination health
 
@@ -97,6 +134,8 @@ Owners/members can open **Bulk replay**, choose selected requests or all current
 
 `X-Forwarded-Host` is never trusted. `X-Untasked-Original-Host` (set by the untasked.run router) is honoured only when it matches `TRUSTED_ORIGINAL_HOSTS` (comma-separated, default `*.untasked.run`). Self-hosters behind their own proxy should leave it unset or set it to their own domain.
 
-## Turnkey local self-hosting
+## Self-hosted backups and recovery
 
-Run `docker compose -f docker-compose.selfhost.yml up --build` and open http://localhost:8080. This standalone PostgreSQL installation persists the database and generated encryption key in named volumes. Back up both volumes together; deleting the key makes encrypted data unreadable. For public deployment, set a durable APP_KEY, APP_URL, TLS termination, and independent backups. Never expose this local configuration directly to the internet. Core capture, inspection, replay, forwarding, retention, and exports require no subscription.
+Compose volumes persist across normal restarts; they are not backups. Operators must schedule encrypted, off-host PostgreSQL backups and separately preserve the matching Laravel `APP_KEY` (or the generated key volume). To recover, restore the database into an isolated installation and supply that same key before starting the app. Verify that a previously captured synthetic payload decrypts and that forwarding remains disabled during any restore drill. Losing the matching key makes encrypted data unreadable. Retention pruning does not erase independent backups; set a separate backup expiry policy. No automated backup or restore guarantee is provided by the local Compose setup.
+
+Core capture, inspection, replay, forwarding, retention, and exports require no subscription.

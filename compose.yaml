@@ -2,6 +2,13 @@
 services:
   web:
     build: .
+    # Scrub after platform injection, before Laravel caches config or starts workers.
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        export STRIPE_MODE=test STRIPE_SECRET= STRIPE_SECRET_KEY= STRIPE_PUBLIC_KEY= STRIPE_WEBHOOK_SECRET= STRIPE_PRICE_DEVELOPER= STRIPE_PRICE_PRO= STRIPE_PRICE_TEAM=
+        exec /bin/sh docker/entrypoint.sh
     ports:
       - "8080:8080"
     environment:
@@ -10,6 +17,20 @@ services:
       APP_DEBUG: "false"
       MANAGED_HOSTING: ${MANAGED_HOSTING:-false}
       APP_KEY: ${APP_KEY:-}
+      # Preview only. Do not forward legacy or live Stripe inputs.
+      STRIPE_MODE: test
+      STRIPE_SECRET: ""
+      STRIPE_SECRET_KEY: ""
+      STRIPE_PUBLIC_KEY: ""
+      STRIPE_WEBHOOK_SECRET: ""
+      STRIPE_PRICE_DEVELOPER: ""
+      STRIPE_PRICE_PRO: ""
+      STRIPE_PRICE_TEAM: ""
+      STRIPE_TEST_SECRET_KEY: ${STRIPE_TEST_SECRET_KEY:-}
+      STRIPE_TEST_WEBHOOK_SECRET: ${STRIPE_TEST_WEBHOOK_SECRET:-}
+      STRIPE_TEST_PRICE_DEVELOPER: ${STRIPE_TEST_PRICE_DEVELOPER:-}
+      STRIPE_TEST_PRICE_PRO: ${STRIPE_TEST_PRICE_PRO:-}
+      STRIPE_TEST_PRICE_TEAM: ${STRIPE_TEST_PRICE_TEAM:-}
       APP_URL: http://127.0.0.1:8080
       DB_CONNECTION: pgsql
       DATABASE_URL: ${DATABASE_URL:-}

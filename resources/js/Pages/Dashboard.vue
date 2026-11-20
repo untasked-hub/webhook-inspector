@@ -403,6 +403,7 @@ onUnmounted(() => { clearInterval(timer); document.removeEventListener('visibili
       <summary class="cursor-pointer min-h-11 text-zinc-300">Usage and billing</summary>
       <div role="progressbar" aria-label="Monthly request quota used" :aria-valuenow="Math.min(usage.requests, usage.limits.requests)" :aria-valuemin="0" :aria-valuemax="usage.limits.requests" class="my-3 h-2 rounded bg-zinc-800"><div class="h-2 rounded bg-emerald-400" :style="{ width: usagePercent + '%' }"></div></div>
       <p class="mt-2 text-zinc-400">{{ usage.requests.toLocaleString() }} / {{ formatQuota(usage.limits.requests) }} requests in {{ usage.period }} UTC. Clearing history does not reset usage.</p>
+      <p v-if="usage.billing_mode === 'test'" class="mt-2 text-amber-300">Stripe test mode. Use test payment details only; no real payment will be taken.</p>
       <p v-if="!usage.billing_enabled" class="mt-2 text-amber-300">Paid checkout and the billing portal are unavailable on this deployment. No payment can be taken.</p>
       <div v-else class="mt-2 flex flex-wrap gap-2"><button v-for="plan in ['developer','pro','team']" :key="plan" :disabled="billingBusy" class="rounded bg-zinc-800 px-3 py-1 capitalize disabled:opacity-50" @click="openBilling(plan)">{{ plan }} checkout</button><button :disabled="billingBusy" class="rounded bg-zinc-800 px-3 py-1 disabled:opacity-50" @click="openBilling()">Manage subscription</button></div>
       
@@ -422,7 +423,7 @@ onUnmounted(() => { clearInterval(timer); document.removeEventListener('visibili
             <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
           </select>
           <p class="text-xs text-zinc-400 mb-2">Project role: {{ projectRole }}</p>
-          <ProjectTokens v-if="selectedProjectId" :key="selectedProjectId" :project="selectedProjectId" :role="projectRole || ''" :api="api" />
+          <ProjectTokens v-if="selectedProjectId" :key="selectedProjectId" :project="selectedProjectId" :endpoint="activeEndpointId || null" :role="projectRole || ''" :api="api" />
           <button v-if="projectRole === 'owner'" class="mb-3 text-xs text-emerald-300" @click="resetTeam(); showTeam = true; loadTeam()">Manage project team</button>
           <form v-if="projectRole === 'owner'" class="flex gap-1 mb-2" @submit.prevent="renameProject">
             <input v-model="renameValue" placeholder="Rename project" aria-label="Rename project" class="flex-1 min-w-0 rounded bg-zinc-900 border border-zinc-700 px-2 py-1 text-xs" />
@@ -443,7 +444,7 @@ onUnmounted(() => { clearInterval(timer); document.removeEventListener('visibili
         <h2 class="text-sm font-semibold">Request history</h2>
         <p class="text-xs text-zinc-400"><span role="status">{{ refreshStatus }}</span><span v-if="lastRefresh"> · Last successful refresh {{ lastRefresh }}</span> <button class="underline" @click="live = true; pollRequests()">Retry refresh</button></p>
         <div v-if="activeEndpoint" class="rounded-xl border border-zinc-800 bg-zinc-900 p-3 space-y-2">
-          <div class="text-xs text-zinc-400">Receive URL · keep this secret</div>
+          <div class="flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-400"><span>Receive URL · keep this secret</span><span class="rounded bg-zinc-800 px-2 py-0.5 font-mono text-zinc-300" data-testid="endpoint-id">Endpoint ID: {{ activeEndpoint.id }}</span></div>
           <code class="block break-all text-xs text-emerald-400">{{ captureUrl }}</code>
           <div class="flex flex-wrap gap-2">
             <button class="rounded bg-zinc-800 px-2 py-1 text-xs" @click="copyText(captureUrl, 'url')">{{ copied === 'url' ? 'Copied' : 'Copy URL' }}</button>

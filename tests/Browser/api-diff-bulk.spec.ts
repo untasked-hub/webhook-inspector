@@ -48,7 +48,7 @@ test('project tokens, payload/header diff and filtered batch replay', async ({ p
   await page.getByRole('button', { name: 'Save forwarding' }).click()
   await expect.poll(() => forwarding).toMatchObject({ url: '', enabled: false, filter: { method: 'PUT', json_path: 'data.type', json_value: 'paid' } })
   await expect(page.getByText('Forwarding off', { exact: true })).toBeVisible()
-  await page.getByText('Project API tokens', { exact: true }).click()
+  await page.getByText('Project API tokens').click()
   await page.getByLabel('Token name').fill('Local CLI')
   await page.getByRole('button', { name: 'Generate API token' }).click()
   await expect(page.getByText('wi_synthetic_only_not_a_credential', { exact: true })).toBeVisible()
