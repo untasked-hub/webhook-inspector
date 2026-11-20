@@ -17,8 +17,8 @@ it('provides authoritative plan keys and billing unavailable state', function ()
 });
 
 it('reports configured billing without changing plan values', function () {
-    config(['billing.managed' => true, 'billing.secret' => 'synthetic', 'billing.webhook_secret' => 'synthetic']);
-    foreach (['developer', 'pro', 'team'] as $key) config(['billing.plans.'.$key.'.stripe_price' => 'synthetic']);
+    config(['billing.managed' => true, 'billing.checkout_enabled' => true, 'billing.stripe_mode' => 'live', 'billing.secret' => 'sk_live_fixture', 'billing.webhook_secret' => 'whsec_fixture']);
+    foreach (['developer', 'pro', 'team'] as $key) config(['billing.plans.'.$key.'.stripe_price' => 'price_'.$key]);
     $this->get('/pricing')->assertOk()->assertInertia(fn (Assert $page) => $page
-        ->where('page.billing_enabled', true)->where('page.billing_note', 'Checkout is available.'));
+        ->where('page.billing_enabled', true)->where('page.billing_note', 'Checkout is configured on this deployment.'));
 });

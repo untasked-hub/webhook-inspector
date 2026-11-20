@@ -1,0 +1,27 @@
+import { expect, test } from '@playwright/test'
+
+test.use({ launchOptions: { executablePath: process.env.CHROME_PATH || '/usr/bin/google-chrome' }, viewport: { width: 390, height: 844 } })
+
+test('new account captures and inspects a real synthetic webhook on mobile', async ({ page }) => {
+  await page.goto('/register')
+  await page.locator('#name').fill('Quickstart test workspace')
+  await page.locator('#email').fill(`quickstart-${Date.now()}@example.invalid`)
+  await page.locator('#password').fill('Synthetic-only-password-94832!')
+  await page.locator('#password-confirmation').fill('Synthetic-only-password-94832!')
+  await page.getByRole('button', { name: 'Sign up' }).click()
+  await page.waitForURL('**/dashboard')
+  await page.getByRole('textbox', { name: 'New project' }).fill('Quickstart')
+  await page.getByRole('button', { name: 'Add', exact: true }).click()
+  await page.getByRole('textbox', { name: 'New endpoint' }).fill('Sandbox')
+  await page.getByRole('button', { name: 'Create', exact: true }).click()
+  await page.getByRole('button', { name: 'Sandbox', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Send a test request' })).toBeVisible()
+  const url = await page.getByText('Receive URL · keep this secret').locator('+ code').textContent()
+  const endpoint = new URL(url!.trim())
+  expect(endpoint.origin).toBe(new URL(page.url()).origin)
+  const response = await page.request.post(endpoint.toString(), { data: { event: 'quickstart.ping' } })
+  expect(response.ok()).toBe(true)
+  await page.getByRole('button', { name: /POST/ }).click({ timeout: 15_000 })
+  await expect(page.getByText(/quickstart\.ping/).last()).toBeVisible()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+})

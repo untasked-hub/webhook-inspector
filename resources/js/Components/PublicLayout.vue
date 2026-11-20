@@ -25,7 +25,7 @@ const active = (path: string) => page.url.split('?')[0] === path
     <footer class="mt-16 border-t border-zinc-800">
       <div class="mx-auto grid max-w-7xl gap-8 px-4 py-10 text-sm sm:grid-cols-2 sm:px-6 lg:grid-cols-4">
         <div><p class="font-semibold">Webhook Inspector</p><p class="mt-3 leading-6 text-zinc-400">Inspect, debug, and replay.<br />Open source or managed.</p></div>
-        <div><h2 class="font-medium">Product</h2><Link class="footer-link" href="/pricing">Plans</Link><Link class="footer-link" href="/docs">Documentation</Link></div>
+        <div><h2 class="font-medium">Product</h2><Link class="footer-link" href="/pricing">Plans</Link><Link class="footer-link" href="/docs">Documentation</Link><Link class="footer-link" href="/security">Security &amp; support</Link></div>
         <div><h2 class="font-medium">Build</h2><Link class="footer-link" href="/self-hosting">Self-hosting</Link><a class="footer-link" href="https://github.com/untasked-hub/webhook-inspector">GitHub ↗</a></div>
         <div><h2 class="font-medium">Legal</h2><Link class="footer-link" href="/privacy">Privacy</Link><Link class="footer-link" href="/terms">Terms</Link></div>
         <p class="text-xs text-zinc-400 sm:col-span-2 lg:col-span-4">Built and maintained by Untasked agents.</p>
