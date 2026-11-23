@@ -23,6 +23,78 @@ const newProject = ref(''), newEndpoint = ref(''), selectedProjectId = ref<numbe
 const methodFilter = ref(''), search = ref(''), copied = ref('')
 const fromDate = ref(''), toDate = ref(''), contentType = ref(''), minSize = ref(''), maxSize = ref(''), nextBefore = ref<number | null>(null)
 const usage = ref<any>(null), replayConfirmed = ref(false), loading = ref(false), billingBusy = ref(false)
+const checkoutState = ref<'idle' | 'verifying' | 'confirmed' | 'failed'>('idle')
+const checkoutMessage = ref('')
+let checkoutPollAttempts = 0
+let checkoutPollTimer: number | undefined
+const planLabels: Record<string, string> = { free: 'Free', developer: 'Developer', pro: 'Pro', team: 'Team' }
+function planName(plan?: string) { return planLabels[plan || 'free'] || (plan ? plan.charAt(0).toUpperCase() + plan.slice(1) : 'Free') }
+function formatRenewalDate(iso?: string | null) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' })
+}
+const hasActivePaidSub = computed(() => ['active', 'trialing', 'past_due', 'unpaid', 'incomplete'].includes(usage.value?.subscription_status || ''))
+const subscriptionStatusLabel = computed(() => {
+  const s = usage.value?.subscription_status || 'none'
+  if (s === 'active' && usage.value?.cancel_at_period_end) return 'Canceling at period end'
+  if (s === 'active') return 'Active'
+  if (s === 'trialing') return 'Trialing'
+  if (s === 'past_due') return 'Past due'
+  if (s === 'unpaid') return 'Unpaid'
+  if (s === 'incomplete') return 'Incomplete'
+  if (s === 'canceled') return 'Canceled'
+  return 'Free tier'
+})
+function clearCheckoutQuery() {
+  const url = new URL(window.location.href)
+  if (url.searchParams.has('checkout') || url.searchParams.has('session_id')) {
+    url.searchParams.delete('checkout')
+    url.searchParams.delete('session_id')
+    window.history.replaceState({}, '', url.pathname + url.search + url.hash)
+  }
+}
+async function verifyCheckoutReturn(sessionId: string | null) {
+  checkoutState.value = 'verifying'
+  checkoutMessage.value = 'Verifying your checkout with Stripe…'
+  try {
+    const qs = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ''
+    const r = await api(`/api/billing/checkout-status${qs}`)
+    const data = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      checkoutState.value = 'failed'
+      checkoutMessage.value = data.message || 'Could not verify your checkout session. Please refresh or check Manage billing.'
+      clearCheckoutQuery()
+      return
+    }
+    await loadUsage()
+    if (data.state === 'confirmed') {
+      checkoutState.value = 'confirmed'
+      const modeSuffix = data.billing_mode === 'test' ? ' (Stripe Test Mode — no real charge)' : ''
+      const renewSuffix = data.renews_at ? ` Renews ${formatRenewalDate(data.renews_at)} UTC.` : ''
+      checkoutMessage.value = `Payment successful — your plan is now ${planName(data.plan)}.${renewSuffix}${modeSuffix}`
+      clearCheckoutQuery()
+      return
+    }
+    if (data.state === 'failed') {
+      checkoutState.value = 'failed'
+      checkoutMessage.value = data.message || 'Checkout did not complete. No plan change has been applied.'
+      clearCheckoutQuery()
+      return
+    }
+    checkoutPollAttempts++
+    if (checkoutPollAttempts < 6) {
+      checkoutMessage.value = 'Payment received — waiting for Stripe subscription confirmation…'
+      checkoutPollTimer = window.setTimeout(() => verifyCheckoutReturn(sessionId), 2000)
+    } else {
+      checkoutMessage.value = 'Checkout return received, still awaiting final webhook confirmation. Your plan will update automatically once Stripe finishes processing.'
+      clearCheckoutQuery()
+    }
+  } catch {
+    checkoutState.value = 'failed'
+    checkoutMessage.value = 'Network error while verifying checkout. Refresh the page to see your updated plan.'
+  }
+}
 const visibleEndpoints = computed(() => endpoints.value.filter(e => !selectedProjectId.value || e.project_id === selectedProjectId.value))
 const defaultReceiver = () => ({ response_status: 202, response_content_type: 'application/json', response_body: '{"received":true}', signature_provider: 'auto' })
 const receiver = ref<any>(defaultReceiver()), signingSecret = ref(''), clearSecret = ref(false)
@@ -353,8 +425,17 @@ function exportJson(format = 'json') {
   const q = filters(); q.set('format', format)
   const a = document.createElement('a'); a.href = `/api/endpoints/${activeEndpointId.value}/requests?${q}`; a.download = `webhooks.${format}`; a.click()
 }
-onMounted(() => { document.addEventListener('visibilitychange', visibilityChanged); loadProjects(); loadUsage(); timer = window.setInterval(() => { pollRequests(); if (!document.hidden && live.value) { loadSettings(false); loadUsage(); if (showAnalytics.value) loadAnalytics() } }, 2000) })
-onUnmounted(() => { clearInterval(timer); document.removeEventListener('visibilitychange', visibilityChanged) })
+onMounted(() => {
+  document.addEventListener('visibilitychange', visibilityChanged)
+  loadProjects()
+  loadUsage()
+  const params = new URLSearchParams(window.location.search)
+  if (params.get('checkout') === 'complete') {
+    verifyCheckoutReturn(params.get('session_id'))
+  }
+  timer = window.setInterval(() => { pollRequests(); if (!document.hidden && live.value) { loadSettings(false); loadUsage(); if (showAnalytics.value) loadAnalytics() } }, 2000)
+})
+onUnmounted(() => { clearInterval(timer); if (checkoutPollTimer) clearTimeout(checkoutPollTimer); document.removeEventListener('visibilitychange', visibilityChanged) })
 </script>
 
 <template>
@@ -365,6 +446,13 @@ onUnmounted(() => { clearInterval(timer); document.removeEventListener('visibili
       <div class="font-semibold tracking-tight">Webhook Inspector <span class="text-xs text-zinc-400 ml-2">{{ account.name }}</span></div>
       <nav aria-label="Account navigation" class="flex flex-wrap items-center gap-4 text-sm"><button class="text-zinc-400 hover:text-zinc-100" :aria-pressed="showAnalytics" @click="showAnalytics = !showAnalytics; if (showAnalytics) loadAnalytics()">Analytics</button><Link href="/docs" class="inline-flex min-h-11 items-center text-zinc-300">Docs</Link><Link href="/pricing" class="inline-flex min-h-11 items-center text-zinc-300">Plans</Link><button class="text-zinc-400 hover:text-zinc-200" @click="router.post('/logout')">Log out</button></nav>
     </header>
+    <div v-if="checkoutState !== 'idle'" aria-label="Checkout status" class="border-b px-6 py-3 flex flex-wrap items-center justify-between gap-3" :class="checkoutState === 'confirmed' ? 'border-emerald-600/60 bg-emerald-950/40 text-emerald-200' : checkoutState === 'failed' ? 'border-red-600/60 bg-red-950/40 text-red-200' : 'border-amber-600/60 bg-amber-950/40 text-amber-200'">
+      <p :role="checkoutState === 'failed' ? 'alert' : 'status'" class="text-sm font-medium">{{ checkoutMessage }}</p>
+      <div class="flex items-center gap-3 text-xs">
+        <button v-if="checkoutState === 'confirmed' && usage?.billing_enabled && usage?.has_billing_account" :disabled="billingBusy" class="rounded bg-emerald-800/80 px-3 py-1.5 font-medium text-emerald-100 hover:bg-emerald-700 disabled:opacity-50" @click="openBilling()">Manage billing</button>
+        <button class="underline text-zinc-300 hover:text-white" @click="checkoutState = 'idle'; checkoutMessage = ''">Dismiss</button>
+      </div>
+    </div>
     <div v-if="notice || error" aria-label="Workspace feedback" class="border-b border-zinc-800 px-6 py-3"><p v-if="notice" role="status" class="text-sm text-emerald-300">{{ notice }}</p><p v-if="error" role="alert" class="text-sm text-red-300">{{ error }}</p></div>
     <section v-if="pendingInvite" class="border-b border-emerald-800 p-4 space-y-2"><h2 class="font-semibold">Project invitation</h2><p class="text-sm text-zinc-400">Accept only invitations from people you trust. Joining grants access to their captured webhook data.</p><button class="public-primary" @click="acceptInvite">Accept invitation</button><button class="ml-3 text-sm" @click="pendingInvite = ''">Dismiss</button></section>
     <section v-if="showTeam && projectRole === 'owner'" class="border-b border-zinc-800 p-4 space-y-3" aria-label="Project team">
@@ -398,16 +486,32 @@ onUnmounted(() => { clearInterval(timer); document.removeEventListener('visibili
       </div>
       <p v-else class="text-sm text-zinc-400">Loading analytics...</p>
     </section>
-    <div v-if="usage" class="border-b border-zinc-800 px-6 py-2 text-xs text-zinc-400">{{ usage.managed ? usage.plan + ' plan' : 'Self-hosted' }} · {{ usage.requests.toLocaleString() }} requests this month <span v-if="usage.managed">/ {{ formatQuota(usage.limits.requests) }}</span> · Retention up to {{ usage.limits.retention }} days <span v-if="!usage.billing_enabled">· Paid checkout not enabled</span></div>
-    <details v-if="usage && usage.managed" class="border-b border-zinc-800 px-6 py-2 text-sm">
-      <summary class="cursor-pointer min-h-11 text-zinc-300">Usage and billing</summary>
-      <div role="progressbar" aria-label="Monthly request quota used" :aria-valuenow="Math.min(usage.requests, usage.limits.requests)" :aria-valuemin="0" :aria-valuemax="usage.limits.requests" class="my-3 h-2 rounded bg-zinc-800"><div class="h-2 rounded bg-emerald-400" :style="{ width: usagePercent + '%' }"></div></div>
-      <p class="mt-2 text-zinc-400">{{ usage.requests.toLocaleString() }} / {{ formatQuota(usage.limits.requests) }} requests in {{ usage.period }} UTC. Clearing history does not reset usage.</p>
-      <p v-if="usage.billing_mode === 'test'" class="mt-2 text-amber-300">Stripe test mode. Use test payment details only; no real payment will be taken.</p>
-      <p v-if="!usage.billing_enabled" class="mt-2 text-amber-300">Paid checkout and the billing portal are unavailable on this deployment. No payment can be taken.</p>
-      <div v-else class="mt-2 flex flex-wrap gap-2"><button v-for="plan in ['developer','pro','team']" :key="plan" :disabled="billingBusy" class="rounded bg-zinc-800 px-3 py-1 capitalize disabled:opacity-50" @click="openBilling(plan)">{{ plan }} checkout</button><button :disabled="billingBusy" class="rounded bg-zinc-800 px-3 py-1 disabled:opacity-50" @click="openBilling()">Manage subscription</button></div>
-      
-    </details>
+    <section v-if="usage" aria-label="Plan and billing" class="border-b border-zinc-800 px-6 py-3 text-sm">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div class="flex flex-wrap items-center gap-2 text-xs text-zinc-300">
+          <span class="font-semibold text-zinc-100">Current plan: {{ usage.managed ? planName(usage.plan) : 'Self-hosted' }}</span>
+          <span v-if="usage.managed" class="rounded px-2 py-0.5 text-[11px] font-medium" :class="usage.subscription_status === 'active' && !usage.cancel_at_period_end ? 'bg-emerald-950 text-emerald-300 border border-emerald-700/60' : usage.subscription_status === 'past_due' || usage.subscription_status === 'unpaid' ? 'bg-red-950 text-red-300 border border-red-700/60' : usage.cancel_at_period_end || usage.subscription_status === 'trialing' ? 'bg-amber-950 text-amber-200 border border-amber-700/60' : 'bg-zinc-900 text-zinc-300 border border-zinc-700'">{{ subscriptionStatusLabel }}</span>
+          <span v-if="usage.managed && usage.renews_at && ['active','trialing','past_due'].includes(usage.subscription_status)" class="text-zinc-400">· {{ usage.cancel_at_period_end ? 'Ends' : 'Renews' }} {{ formatRenewalDate(usage.renews_at) }} UTC</span>
+          <span class="text-zinc-400">· {{ usage.requests.toLocaleString() }} <span v-if="usage.managed">/ {{ formatQuota(usage.limits.requests) }}</span> requests ({{ usage.period }} UTC) · Retention up to {{ usage.limits.retention }}d</span>
+          <span v-if="usage.billing_enabled && usage.billing_mode === 'test'" class="rounded bg-amber-950 px-1.5 py-0.5 font-medium text-amber-300">Stripe Test Mode</span>
+          <span v-else-if="!usage.billing_enabled" class="text-zinc-400">· Paid checkout not enabled</span>
+        </div>
+        <div v-if="usage.managed && usage.billing_enabled" class="flex flex-wrap items-center gap-2">
+          <button v-if="usage.has_billing_account" :disabled="billingBusy" class="rounded border border-emerald-600/70 bg-emerald-950/60 px-3 py-1.5 text-xs font-medium text-emerald-200 hover:bg-emerald-900/60 disabled:opacity-50" @click="openBilling()">{{ billingBusy ? 'Opening portal…' : 'Manage billing' }}</button>
+          <template v-if="!hasActivePaidSub">
+            <button v-for="plan in ['developer','pro','team']" :key="plan" :disabled="billingBusy" class="rounded bg-zinc-800 px-3 py-1.5 text-xs capitalize text-zinc-200 hover:bg-zinc-700 disabled:opacity-50" @click="openBilling(plan)">{{ usage.billing_mode === 'test' ? plan + ' test checkout' : 'Upgrade to ' + plan }}</button>
+          </template>
+        </div>
+      </div>
+      <details v-if="usage.managed" class="mt-2 text-xs text-zinc-400">
+        <summary class="cursor-pointer inline-flex items-center text-zinc-400 hover:text-zinc-200">Quota &amp; billing details</summary>
+        <div role="progressbar" aria-label="Monthly request quota used" :aria-valuenow="Math.min(usage.requests, usage.limits.requests)" :aria-valuemin="0" :aria-valuemax="usage.limits.requests" class="my-2 h-2 rounded bg-zinc-800"><div class="h-2 rounded bg-emerald-400" :style="{ width: usagePercent + '%' }"></div></div>
+        <p>{{ usage.requests.toLocaleString() }} / {{ formatQuota(usage.limits.requests) }} requests in {{ usage.period }} UTC. Clearing history does not reset usage.</p>
+        <p v-if="usage.billing_mode === 'test'" class="mt-2 rounded border border-amber-500/50 bg-amber-950/40 p-2 text-amber-200">Stripe test mode. Use test payment details only; no real payment will be taken.</p>
+        <p v-if="!usage.billing_enabled" class="mt-2 text-amber-300">Paid checkout and the billing portal are unavailable on this deployment. No payment can be taken.</p>
+        <p v-else-if="usage.has_billing_account" class="mt-2 text-zinc-400">Use <strong>Manage billing</strong> to update your payment method, switch plans, view invoices, or cancel renewal in the Stripe Billing Portal.</p>
+      </details>
+    </section>
     <div class="grid flex-1 grid-cols-1 lg:grid-cols-12">
       <aside class="min-w-0 border-b lg:col-span-3 lg:border-r border-zinc-800 p-4 space-y-4">
         <h2 class="text-sm font-semibold">Projects &amp; endpoints</h2>

@@ -22,6 +22,8 @@ $app = Application::configure(basePath: dirname(__DIR__))
                 \Illuminate\Support\Facades\Route::post('/requests/{capture}/replay', [$controller, 'replay']);
             });
             \Illuminate\Support\Facades\Route::post('/stripe/webhook', [\App\Http\Controllers\BillingController::class, 'webhook']);
+            // Alias matching the Stripe Sandbox destination configured by the operator.
+            \Illuminate\Support\Facades\Route::post('/billing/stripe/webhook', [\App\Http\Controllers\BillingController::class, 'webhook']);
             \Illuminate\Support\Facades\Route::any('/w/{token}', [\App\Http\Controllers\InspectorController::class, 'capture'])
                 ->where('token', '[A-Za-z0-9]{48}');
             \Illuminate\Support\Facades\Route::any('/c/{token}', [\App\Http\Controllers\InspectorController::class, 'capture'])

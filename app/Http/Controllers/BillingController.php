@@ -15,7 +15,24 @@ class BillingController extends Controller
         $id = $request->user()->id;
         $limits = Billing::limits($id);
         $enabled = Billing::enabled();
-        return response()->json(['plan' => Billing::plan($id), 'limits' => ['requests' => $limits['requests'], 'retention' => $limits['retention']], 'period' => now()->format('Y-m'), 'requests' => (int) DB::table('usage_counters')->where('user_id', $id)->where('period', now()->format('Y-m'))->value('requests_count'), 'billing_enabled' => $enabled, 'billing_mode' => $enabled ? config('billing.stripe_mode') : null, 'managed' => (bool) config('billing.managed')])->header('Cache-Control', 'no-store');
+        $account = DB::table('billing_accounts')->where('user_id', $id)->first();
+        $plan = Billing::plan($id);
+        $status = $account->status ?? 'none';
+        $cancelAtPeriodEnd = (bool) ($account->cancel_at_period_end ?? false);
+        $paidUntil = $account && $account->paid_until ? Carbon::parse($account->paid_until)->toIso8601ZuluString() : null;
+        return response()->json([
+            'plan' => $plan,
+            'subscription_status' => $status,
+            'cancel_at_period_end' => $cancelAtPeriodEnd,
+            'renews_at' => $paidUntil,
+            'has_billing_account' => (bool) ($account && $account->customer_id),
+            'limits' => ['requests' => $limits['requests'], 'retention' => $limits['retention']],
+            'period' => now()->format('Y-m'),
+            'requests' => (int) DB::table('usage_counters')->where('user_id', $id)->where('period', now()->format('Y-m'))->value('requests_count'),
+            'billing_enabled' => $enabled,
+            'billing_mode' => $enabled ? config('billing.stripe_mode') : null,
+            'managed' => (bool) config('billing.managed'),
+        ])->header('Cache-Control', 'no-store');
     }
 
     private function stripe(string $method, string $path, array $data = [], ?string $key = null): array
@@ -56,8 +73,87 @@ class BillingController extends Controller
             DB::table('billing_accounts')->where('user_id', $userId)->update(['customer_id' => $customer['id'], 'updated_at' => now()]);
             $customerId = $customer['id'];
         } else $customerId = $account->customer_id;
-        $session = $this->stripe('POST', 'checkout/sessions', ['mode' => 'subscription', 'customer' => $customerId, 'client_reference_id' => (string) $userId, 'line_items' => [['price' => config('billing.plans.'.$data['plan'].'.stripe_price'), 'quantity' => 1]], 'success_url' => url('/dashboard').'?checkout=complete', 'cancel_url' => url('/pricing').'?checkout=cancelled', 'subscription_data' => ['metadata' => ['user_id' => (string) $userId]]], 'checkout-'.$userId.'-'.$data['plan'].'-'.intdiv(time(), 1800));
+        $session = $this->stripe('POST', 'checkout/sessions', ['mode' => 'subscription', 'customer' => $customerId, 'client_reference_id' => (string) $userId, 'line_items' => [['price' => config('billing.plans.'.$data['plan'].'.stripe_price'), 'quantity' => 1]], 'success_url' => url('/dashboard').'?checkout=complete&session_id={CHECKOUT_SESSION_ID}', 'cancel_url' => url('/pricing').'?checkout=cancelled', 'subscription_data' => ['metadata' => ['user_id' => (string) $userId]]], 'checkout-'.$userId.'-'.$data['plan'].'-'.intdiv(time(), 1800));
         return $this->sessionResponse($session, 'checkout.stripe.com');
+    }
+
+    public function checkoutStatus(Request $request)
+    {
+        abort_unless(Billing::enabled(), 503, 'Managed billing is not configured.');
+        $userId = $request->user()->id;
+        $sessionId = $request->query('session_id');
+        if (is_string($sessionId) && $sessionId !== '') {
+            abort_unless(preg_match('/\Acs_(?:test|live)_[A-Za-z0-9_]{10,200}\z/', $sessionId) === 1, 422, 'Invalid checkout session identifier.');
+            $account = DB::table('billing_accounts')->where('user_id', $userId)->first();
+            abort_unless($account && $account->customer_id, 404, 'No billing account found for this user.');
+            $session = $this->stripe('GET', 'checkout/sessions/'.rawurlencode($sessionId));
+            abort_unless(
+                ($session['id'] ?? null) === $sessionId
+                && ($session['customer'] ?? null) === $account->customer_id
+                && (($session['client_reference_id'] ?? null) === null || (string) $session['client_reference_id'] === (string) $userId),
+                403,
+                'Checkout session does not belong to this account.'
+            );
+            $sessionStatus = (string) ($session['status'] ?? '');
+            $paymentStatus = (string) ($session['payment_status'] ?? '');
+            $subscriptionId = $session['subscription'] ?? null;
+            if ($sessionStatus === 'complete' && in_array($paymentStatus, ['paid', 'no_payment_required'], true) && is_string($subscriptionId) && preg_match('/\Asub_[A-Za-z0-9]+\z/', $subscriptionId) === 1) {
+                $subscription = $this->stripe('GET', 'subscriptions/'.rawurlencode($subscriptionId));
+                abort_unless(
+                    ($subscription['id'] ?? null) === $subscriptionId
+                    && ($subscription['customer'] ?? null) === $account->customer_id,
+                    503,
+                    'Billing provider response could not be verified.'
+                );
+                DB::transaction(fn () => $this->applySubscriptionState($subscription));
+            } elseif ($sessionStatus === 'expired') {
+                return response()->json(['state' => 'failed', 'message' => 'This checkout session expired before payment completed.'])->header('Cache-Control', 'no-store');
+            }
+        }
+        $account = DB::table('billing_accounts')->where('user_id', $userId)->first();
+        $plan = Billing::plan($userId);
+        $status = $account->status ?? 'none';
+        $renewsAt = $account && $account->paid_until ? Carbon::parse($account->paid_until)->toIso8601ZuluString() : null;
+        if ($plan !== 'free' && in_array($status, ['active', 'trialing'], true)) {
+            return response()->json([
+                'state' => 'confirmed',
+                'plan' => $plan,
+                'subscription_status' => $status,
+                'cancel_at_period_end' => (bool) ($account->cancel_at_period_end ?? false),
+                'renews_at' => $renewsAt,
+                'billing_mode' => config('billing.stripe_mode'),
+            ])->header('Cache-Control', 'no-store');
+        }
+        return response()->json([
+            'state' => 'verifying',
+            'plan' => $plan,
+            'subscription_status' => $status,
+            'cancel_at_period_end' => (bool) ($account->cancel_at_period_end ?? false),
+            'renews_at' => $renewsAt,
+            'billing_mode' => config('billing.stripe_mode'),
+        ])->header('Cache-Control', 'no-store');
+    }
+
+    private function applySubscriptionState(array $subscription): void
+    {
+        $account = DB::table('billing_accounts')->where('customer_id', $subscription['customer'] ?? '')->lockForUpdate()->first();
+        if ($account && (!$account->subscription_id || $account->subscription_id === $subscription['id'] || (in_array($account->status, ['none', 'canceled', 'incomplete_expired']) && in_array($subscription['status'] ?? '', ['active', 'trialing'])))) {
+            // Checkout sells exactly one plan item. Basil reports its billing period on that item.
+            $items = $subscription['items']['data'] ?? [];
+            $item = is_array($items) && count($items) === 1 && !($subscription['items']['has_more'] ?? false) ? ($items[0] ?? []) : [];
+            $price = $item['price']['id'] ?? '';
+            $plan = collect(config('billing.plans'))->search(fn ($p) => !empty($p['stripe_price']) && $p['stripe_price'] === $price);
+            $periodEnd = $item['current_period_end'] ?? null;
+            $paidUntil = $plan && is_int($periodEnd) && $periodEnd > 0 ? Carbon::createFromTimestampUTC($periodEnd) : null;
+            DB::table('billing_accounts')->where('id', $account->id)->update([
+                'subscription_id' => $subscription['id'],
+                'plan' => $plan ?: 'free',
+                'status' => $subscription['status'] ?? 'none',
+                'cancel_at_period_end' => (bool) ($subscription['cancel_at_period_end'] ?? false),
+                'paid_until' => $paidUntil,
+                'updated_at' => now(),
+            ]);
+        }
     }
 
     public function portal(Request $request)
@@ -91,17 +187,7 @@ class BillingController extends Controller
             abort_unless(($subscription['id'] ?? null) === $object['id'] && is_string($subscription['customer'] ?? null)
                 && preg_match('/\Acus_[A-Za-z0-9_]+\z/', $subscription['customer']) === 1, 503, 'Billing provider response could not be verified.');
             DB::transaction(function () use ($event, $subscription) {
-                $account = DB::table('billing_accounts')->where('customer_id', $subscription['customer'] ?? '')->lockForUpdate()->first();
-                if ($account && (!$account->subscription_id || $account->subscription_id === $subscription['id'] || (in_array($account->status, ['none', 'canceled', 'incomplete_expired']) && in_array($subscription['status'] ?? '', ['active', 'trialing'])))) {
-                    // Checkout sells exactly one plan item. Basil reports its billing period on that item.
-                    $items = $subscription['items']['data'] ?? [];
-                    $item = is_array($items) && count($items) === 1 && !($subscription['items']['has_more'] ?? false) ? ($items[0] ?? []) : [];
-                    $price = $item['price']['id'] ?? '';
-                    $plan = collect(config('billing.plans'))->search(fn ($p) => !empty($p['stripe_price']) && $p['stripe_price'] === $price);
-                    $periodEnd = $item['current_period_end'] ?? null;
-                    $paidUntil = $plan && is_int($periodEnd) && $periodEnd > 0 ? Carbon::createFromTimestampUTC($periodEnd) : null;
-                    DB::table('billing_accounts')->where('id', $account->id)->update(['subscription_id' => $subscription['id'], 'plan' => $plan ?: 'free', 'status' => $subscription['status'] ?? 'none', 'paid_until' => $paidUntil, 'updated_at' => now()]);
-                }
+                $this->applySubscriptionState($subscription);
                 DB::table('billing_events')->insertOrIgnore(['id' => $event['id'], 'created_at' => now()]);
             });
         } else DB::table('billing_events')->insertOrIgnore(['id' => $event['id'], 'created_at' => now()]);

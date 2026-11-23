@@ -17,6 +17,8 @@ class PagesController extends Controller
                 'sections' => [['h' => 'Managed plans', 'p' => ['Request quotas are enforced per account each calendar month. Paid checkout is only available once billing credentials are configured on the server.']]],
                 'plans' => collect(config('billing.plans'))->map(fn ($p, $key) => ['key' => $key, 'name' => $p['name'], 'price' => $p['price'], 'requests' => $p['requests'], 'retention' => $p['retention']])->values()->all(),
                 'billing_enabled' => Billing::enabled(),
+                'billing_mode' => Billing::enabled() ? config('billing.stripe_mode') : null,
+                'signed_in' => auth()->check(),
                 'billing_note' => !Billing::enabled()
                     ? 'Paid checkout is currently unavailable on this deployment: billing is not configured.'
                     : (config('billing.stripe_mode') === 'test'

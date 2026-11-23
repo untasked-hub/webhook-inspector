@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
-import { Link, usePage } from '@inertiajs/vue3'
+import { computed, ref, watch } from 'vue'
+import { Link, router, usePage } from '@inertiajs/vue3'
 const menu = ref(false)
-const page = usePage()
+const page = usePage<{ auth?: { user?: { name: string } | null } }>()
+const signedIn = computed(() => Boolean(page.props.auth?.user))
 watch(() => page.url, () => menu.value = false)
 const links = [['/', 'Home'], ['/pricing', 'Plans'], ['/docs', 'Docs'], ['/self-hosting', 'Self-host']]
 const active = (path: string) => page.url.split('?')[0] === path
@@ -17,7 +18,14 @@ const active = (path: string) => page.url.split('?')[0] === path
         <nav id="public-navigation" aria-label="Main navigation" :class="[menu ? 'flex' : 'hidden', 'w-full flex-col gap-2 md:flex md:w-auto md:flex-row md:items-center']">
           <Link v-for="[href, label] in links" :key="href" :href="href" :aria-current="active(href) ? 'page' : undefined" :class="['inline-flex min-h-11 items-center rounded-lg px-3 text-sm', active(href) ? 'bg-zinc-800 text-emerald-300' : 'text-zinc-300 hover:bg-zinc-900']">{{ label }}</Link>
           <a href="https://github.com/untasked-hub/webhook-inspector" class="inline-flex min-h-11 items-center px-3 text-sm text-zinc-300">GitHub ↗</a>
-          <Link href="/login" class="public-secondary">Log in</Link><Link href="/register" class="public-primary">Start free</Link>
+          <template v-if="signedIn">
+            <Link href="/dashboard" class="public-primary">Dashboard</Link>
+            <button type="button" class="public-secondary" @click="router.post('/logout')">Log out</button>
+          </template>
+          <template v-else>
+            <Link href="/login" class="public-secondary">Log in</Link>
+            <Link href="/register" class="public-primary">Start free</Link>
+          </template>
         </nav>
       </div>
     </header>

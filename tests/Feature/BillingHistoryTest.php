@@ -27,7 +27,7 @@ test('hosted billing configuration never falls back to generic live credentials'
     }
 });
 
-test('billing remains disabled when Stripe secrets are present unless BILLING_CHECKOUT_ENABLED is explicitly true', function () {
+test('hosted test-mode billing enables when all five dedicated test secrets are present, fails closed on live credentials, and respects BILLING_CHECKOUT_ENABLED=false', function () {
     $env = \Illuminate\Support\Env::getRepository();
     $values = [
         'UNTASKED_STORAGE_URL' => 'https://storage.example.invalid',
@@ -42,23 +42,44 @@ test('billing remains disabled when Stripe secrets are present unless BILLING_CH
     try {
         config(['billing' => require config_path('billing.php')]);
         expect(config('billing.managed'))->toBeTrue();
+        expect(config('billing.stripe_mode'))->toBe('test');
+        expect(config('billing.checkout_enabled'))->toBeTrue();
+        expect(Billing::enabled())->toBeTrue();
+
+        $this->get('/pricing')->assertOk()->assertInertia(fn ($page) => $page
+            ->where('page.billing_enabled', true)
+            ->where('page.signed_in', false));
+        $this->postJson('/api/billing/checkout', ['plan' => 'developer'])->assertUnauthorized();
+
+        $this->actingAs(newUser());
+        $this->getJson('/api/usage')->assertOk()->assertJsonPath('billing_enabled', true)->assertJsonPath('billing_mode', 'test');
+        $this->get('/pricing')->assertOk()->assertInertia(fn ($page) => $page
+            ->where('page.billing_enabled', true)
+            ->where('page.billing_mode', 'test')
+            ->where('page.signed_in', true)
+            ->where('page.billing_note', 'Stripe test mode. Use test payment details only; no real payment will be taken.'));
+
+        // Live secret in STRIPE_TEST_SECRET_KEY must fail closed.
+        $env->set('STRIPE_TEST_SECRET_KEY', 'sk_live_fixture');
+        config(['billing' => require config_path('billing.php')]);
+        expect(Billing::enabled())->toBeFalse();
+        expect(Billing::configurationChecks()['API key matches Stripe mode'])->toBeFalse();
+        $env->set('STRIPE_TEST_SECRET_KEY', 'sk_test_fixture');
+
+        // Explicit kill switch BILLING_CHECKOUT_ENABLED=false disables checkout even with test secrets.
+        $env->set('BILLING_CHECKOUT_ENABLED', 'false');
+        config(['billing' => require config_path('billing.php')]);
         expect(config('billing.checkout_enabled'))->toBeFalse();
         expect(Billing::enabled())->toBeFalse();
         expect(Billing::configurationChecks()['billing checkout enabled'])->toBeFalse();
-
-        $this->actingAs(newUser());
         $this->postJson('/api/billing/checkout', ['plan' => 'developer'])->assertStatus(503);
         $this->postJson('/api/billing/portal')->assertStatus(503);
         $this->postJson('/stripe/webhook')->assertStatus(503);
         $this->getJson('/api/usage')->assertOk()->assertJsonPath('billing_enabled', false)->assertJsonPath('billing_mode', null);
         $this->get('/pricing')->assertOk()->assertInertia(fn ($page) => $page
             ->where('page.billing_enabled', false)
+            ->where('page.billing_mode', null)
             ->where('page.billing_note', 'Paid checkout is currently unavailable on this deployment: billing is not configured.'));
-
-        $env->set('BILLING_CHECKOUT_ENABLED', 'true');
-        config(['billing' => require config_path('billing.php')]);
-        expect(config('billing.checkout_enabled'))->toBeTrue();
-        expect(Billing::enabled())->toBeTrue();
     } finally {
         foreach ($values as $name => $value) $env->clear($name);
         $env->clear('BILLING_CHECKOUT_ENABLED');
@@ -266,7 +287,53 @@ test('test-mode pricing discloses that no real payment will be taken', function 
     billingConfig();
     $this->get('/pricing')->assertInertia(fn ($page) => $page
         ->where('page.billing_enabled', true)
+        ->where('page.billing_mode', 'test')
         ->where('page.billing_note', 'Stripe test mode. Use test payment details only; no real payment will be taken.'));
+});
+
+test('explicit STRIPE_TEST_* mode never falls back to live credentials even without platform storage env', function () {
+    $env = \Illuminate\Support\Env::getRepository();
+    $values = [
+        'MANAGED_HOSTING' => 'true',
+        'STRIPE_MODE' => 'live',
+        'STRIPE_SECRET' => 'sk_live_should_never_be_used',
+        'STRIPE_WEBHOOK_SECRET' => 'whsec_live_should_never_be_used',
+        'STRIPE_PRICE_DEVELOPER' => 'price_live_dev',
+        'STRIPE_PRICE_PRO' => 'price_live_pro',
+        'STRIPE_PRICE_TEAM' => 'price_live_team',
+        'STRIPE_TEST_SECRET_KEY' => 'sk_test_only',
+    ];
+    $env->clear('UNTASKED_STORAGE_URL');
+    $env->clear('BILLING_CHECKOUT_ENABLED');
+    foreach ($values as $name => $value) $env->set($name, $value);
+    try {
+        config(['billing' => require config_path('billing.php')]);
+        expect(config('billing.stripe_mode'))->toBe('test');
+        expect(config('billing.secret'))->toBe('sk_test_only');
+        expect(config('billing.webhook_secret'))->toBeNull();
+        expect(config('billing.plans.developer.stripe_price'))->toBeNull();
+        expect(config('billing.plans.pro.stripe_price'))->toBeNull();
+        expect(config('billing.plans.team.stripe_price'))->toBeNull();
+        expect(Billing::enabled())->toBeFalse();
+    } finally {
+        foreach ($values as $name => $value) $env->clear($name);
+    }
+});
+
+test('signed webhook alias /billing/stripe/webhook enforces test mode and reconciles subscription state', function () {
+    billingConfig();
+    $user = newUser();
+    DB::table('billing_accounts')->insert(['user_id' => $user->id, 'customer_id' => 'cus_alias', 'plan' => 'free', 'status' => 'none', 'created_at' => now(), 'updated_at' => now()]);
+    $subscription = ['livemode' => false, 'id' => 'sub_alias', 'customer' => 'cus_alias', 'status' => 'active', 'items' => ['data' => [['price' => ['id' => 'price_dev'], 'current_period_end' => now()->addMonth()->timestamp]]]];
+    Http::fake(['https://api.stripe.com/v1/subscriptions/sub_alias' => Http::response($subscription)]);
+    $event = ['id' => 'evt_alias_live', 'type' => 'customer.subscription.updated', 'livemode' => true, 'data' => ['object' => ['id' => 'sub_alias']]];
+    $body = json_encode($event); $t = time();
+    $sig = hash_hmac('sha256', $t.'.'.$body, 'whsec_fixture');
+    $this->call('POST', '/billing/stripe/webhook', [], [], [], ['CONTENT_TYPE' => 'application/json', 'HTTP_ACCEPT' => 'application/json', 'HTTP_STRIPE_SIGNATURE' => 't='.$t.',v1='.$sig], $body)->assertStatus(400);
+    $event['id'] = 'evt_alias_test'; $event['livemode'] = false;
+    $body = json_encode($event); $sig = hash_hmac('sha256', $t.'.'.$body, 'whsec_fixture');
+    $this->call('POST', '/billing/stripe/webhook', [], [], [], ['CONTENT_TYPE' => 'application/json', 'HTTP_ACCEPT' => 'application/json', 'HTTP_STRIPE_SIGNATURE' => 't='.$t.',v1='.$sig], $body)->assertOk();
+    expect(Billing::plan($user->id))->toBe('developer');
 });
 
 test('checkout rejects provider responses in the wrong mode and invalid session links', function () {
@@ -315,4 +382,149 @@ test('encryption migration upgrades legacy destination rows without double encry
     expect(Crypt::decryptString($cipher))->toBe('https://93.184.216.34/legacy');
     $migration->up(); $migration->down();
     expect(DB::table('forward_targets')->where('endpoint_id', $e)->value('url'))->toBe($cipher);
+});
+
+test('checkout success_url includes CHECKOUT_SESSION_ID and checkout-status reconciles confirmed test subscription', function () {
+    billingConfig();
+    $user = newUser();
+    $this->actingAs($user);
+    $periodEnd = now()->addMonth()->timestamp;
+    Http::fake([
+        'https://api.stripe.com/v1/customers' => Http::response(['id' => 'cus_return_1', 'livemode' => false]),
+        'https://api.stripe.com/v1/checkout/sessions' => Http::response(['id' => 'cs_test_return123456', 'url' => 'https://checkout.stripe.com/c/pay/cs_test_return123456', 'livemode' => false]),
+        'https://api.stripe.com/v1/checkout/sessions/cs_test_return123456' => Http::response([
+            'id' => 'cs_test_return123456',
+            'livemode' => false,
+            'customer' => 'cus_return_1',
+            'client_reference_id' => (string) $user->id,
+            'status' => 'complete',
+            'payment_status' => 'paid',
+            'subscription' => 'sub_return1',
+        ]),
+        'https://api.stripe.com/v1/subscriptions/sub_return1' => Http::response([
+            'id' => 'sub_return1',
+            'livemode' => false,
+            'customer' => 'cus_return_1',
+            'status' => 'active',
+            'cancel_at_period_end' => false,
+            'items' => ['data' => [['price' => ['id' => 'price_dev'], 'current_period_end' => $periodEnd]]],
+        ]),
+    ]);
+
+    $this->postJson('/api/billing/checkout', ['plan' => 'developer'])->assertOk()
+        ->assertJson(['url' => 'https://checkout.stripe.com/c/pay/cs_test_return123456']);
+
+    Http::assertSent(fn ($req) => str_ends_with($req->url(), '/checkout/sessions')
+        && str_contains((string) ($req['success_url'] ?? ''), 'checkout=complete&session_id={CHECKOUT_SESSION_ID}'));
+
+    $this->getJson('/api/billing/checkout-status?session_id=cs_test_return123456')
+        ->assertOk()
+        ->assertJson([
+            'state' => 'confirmed',
+            'plan' => 'developer',
+            'subscription_status' => 'active',
+            'cancel_at_period_end' => false,
+            'billing_mode' => 'test',
+        ]);
+
+    $this->getJson('/api/usage')
+        ->assertOk()
+        ->assertJson([
+            'plan' => 'developer',
+            'subscription_status' => 'active',
+            'cancel_at_period_end' => false,
+            'has_billing_account' => true,
+            'billing_enabled' => true,
+            'billing_mode' => 'test',
+        ])
+        ->assertJsonPath('renews_at', fn ($v) => is_string($v) && str_ends_with($v, 'Z'));
+});
+
+test('checkout-status enforces ownership, mode, invalid id, verifying, and expired states', function () {
+    billingConfig();
+    $user = newUser();
+    $other = newUser();
+    DB::table('billing_accounts')->insert(['user_id' => $user->id, 'customer_id' => 'cus_owner_1', 'plan' => 'free', 'status' => 'none', 'created_at' => now(), 'updated_at' => now()]);
+    DB::table('billing_accounts')->insert(['user_id' => $other->id, 'customer_id' => 'cus_other_2', 'plan' => 'free', 'status' => 'none', 'created_at' => now(), 'updated_at' => now()]);
+
+    $this->actingAs($user);
+    // Invalid session_id format rejected
+    $this->getJson('/api/billing/checkout-status?session_id=bad_id')->assertStatus(422);
+
+    // Without session_id while still free returns verifying (never trusts bare query param)
+    $this->getJson('/api/billing/checkout-status')
+        ->assertOk()
+        ->assertJson(['state' => 'verifying', 'plan' => 'free', 'subscription_status' => 'none']);
+
+    Http::fake([
+        'https://api.stripe.com/v1/checkout/sessions/cs_test_otheruser123' => Http::response([
+            'id' => 'cs_test_otheruser123',
+            'livemode' => false,
+            'customer' => 'cus_other_2',
+            'client_reference_id' => (string) $other->id,
+            'status' => 'complete',
+            'payment_status' => 'paid',
+            'subscription' => 'sub_other2',
+        ]),
+        'https://api.stripe.com/v1/checkout/sessions/cs_test_expired12345' => Http::response([
+            'id' => 'cs_test_expired12345',
+            'livemode' => false,
+            'customer' => 'cus_owner_1',
+            'client_reference_id' => (string) $user->id,
+            'status' => 'expired',
+            'payment_status' => 'unpaid',
+        ]),
+        'https://api.stripe.com/v1/checkout/sessions/cs_test_livemode1234' => Http::response([
+            'id' => 'cs_test_livemode1234',
+            'livemode' => true,
+            'customer' => 'cus_owner_1',
+            'status' => 'complete',
+            'payment_status' => 'paid',
+        ]),
+    ]);
+
+    // Cross-tenant session_id rejected with 403
+    $this->getJson('/api/billing/checkout-status?session_id=cs_test_otheruser123')->assertStatus(403);
+    // Expired session returns failed state without upgrading plan
+    $this->getJson('/api/billing/checkout-status?session_id=cs_test_expired12345')
+        ->assertOk()
+        ->assertJson(['state' => 'failed']);
+    // Wrong-mode (livemode=true in test mode) rejected with 503
+    $this->getJson('/api/billing/checkout-status?session_id=cs_test_livemode1234')->assertStatus(503);
+    expect(Billing::plan($user->id))->toBe('free');
+});
+
+test('usage reflects cancel_at_period_end from signed webhook and portal opens for billing account', function () {
+    billingConfig();
+    $user = newUser();
+    DB::table('billing_accounts')->insert(['user_id' => $user->id, 'customer_id' => 'cus_cancel_1', 'plan' => 'free', 'status' => 'none', 'created_at' => now(), 'updated_at' => now()]);
+    $periodEnd = now()->addDays(20)->timestamp;
+    Http::fake([
+        'https://api.stripe.com/v1/subscriptions/sub_cancel1' => Http::response([
+            'id' => 'sub_cancel1',
+            'livemode' => false,
+            'customer' => 'cus_cancel_1',
+            'status' => 'active',
+            'cancel_at_period_end' => true,
+            'items' => ['data' => [['price' => ['id' => 'price_pro'], 'current_period_end' => $periodEnd]]],
+        ]),
+        'https://api.stripe.com/v1/billing_portal/sessions' => Http::response([
+            'livemode' => false,
+            'url' => 'https://billing.stripe.com/p/session/test_portal_1',
+        ]),
+    ]);
+    signedEvent($this, ['id' => 'evt_cancel_end', 'type' => 'customer.subscription.updated', 'data' => ['object' => ['id' => 'sub_cancel1']]])->assertOk();
+
+    $this->actingAs($user);
+    $this->getJson('/api/usage')
+        ->assertOk()
+        ->assertJson([
+            'plan' => 'pro',
+            'subscription_status' => 'active',
+            'cancel_at_period_end' => true,
+            'has_billing_account' => true,
+        ]);
+    $this->postJson('/api/billing/portal')
+        ->assertOk()
+        ->assertJson(['url' => 'https://billing.stripe.com/p/session/test_portal_1']);
 });

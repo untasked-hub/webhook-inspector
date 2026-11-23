@@ -22,6 +22,7 @@ Route::middleware('guest')->group(function () {
 });
 Route::middleware('auth')->group(function () {
     Route::get('/api/usage', [\App\Http\Controllers\BillingController::class, 'usage']);
+    Route::get('/api/billing/checkout-status', [\App\Http\Controllers\BillingController::class, 'checkoutStatus'])->middleware('throttle:20,1');
     Route::post('/api/billing/checkout', [\App\Http\Controllers\BillingController::class, 'checkout'])->middleware('throttle:5,1');
     Route::post('/api/billing/portal', [\App\Http\Controllers\BillingController::class, 'portal'])->middleware('throttle:10,1');
     Route::post('/logout', [InspectorController::class, 'logout']);
