@@ -8,6 +8,10 @@ const sections = computed(() => props.page.sections.map((s, i) => ({ ...s, id: `
 const checkoutCancelled = ref(false)
 const checkoutPlan = ref(null)
 const checkoutError = ref('')
+const selectedPlan = computed(() => {
+  if (!props.page.plans || !props.page.selected_plan) return null
+  return props.page.plans.find((p) => p.key === props.page.selected_plan && p.price > 0) || null
+})
 async function startTestCheckout(plan) {
   if (checkoutPlan.value) return
   checkoutPlan.value = plan
@@ -24,7 +28,7 @@ async function startTestCheckout(plan) {
       body: JSON.stringify({ plan }),
     })
     if (response.status === 401 || response.status === 419) {
-      window.location.assign('/login')
+      window.location.assign(`/login?plan=${encodeURIComponent(plan)}`)
       return
     }
     const data = await response.json().catch(() => ({}))
@@ -51,19 +55,23 @@ onMounted(() => {
   <Head :title="page.title + ' – Webhook Inspector'"><meta name="description" :content="page.description" /><meta property="og:title" :content="page.title + ' – Webhook Inspector'" /><meta property="og:description" :content="page.description" /><meta property="og:type" content="website" /><meta name="twitter:card" content="summary" /></Head>
   <PublicLayout>
     <div class="mx-auto max-w-7xl px-4 py-12 sm:px-6 sm:py-16">
-      <header class="mb-10 max-w-3xl"><p class="mb-3 text-sm font-medium uppercase tracking-widest text-emerald-300">{{ page.slug === 'pricing' ? 'Managed hosting' : 'Resources' }}</p><h1 class="text-3xl font-semibold tracking-tight sm:text-5xl">{{ page.slug === 'pricing' ? 'Plans for every stage' : page.title }}</h1><p class="mt-5 text-lg leading-8 text-zinc-400">{{ page.description }}</p></header>
+      <header class="mb-10 max-w-3xl"><p class="mb-3 text-sm font-medium uppercase tracking-widest text-emerald-300">{{ page.eyebrow || (page.slug === 'pricing' ? 'Managed hosting' : 'Resources') }}</p><h1 class="text-3xl font-semibold tracking-tight sm:text-5xl">{{ page.slug === 'pricing' ? 'Plans for every stage' : page.title }}</h1><p v-if="page.version" class="mt-3 text-sm font-medium text-zinc-400">{{ page.version }}</p><p class="mt-5 text-lg leading-8 text-zinc-400">{{ page.description }}</p></header>
       <template v-if="page.plans">
         <div v-if="checkoutCancelled" role="status" class="mb-6 rounded-lg border border-zinc-700 bg-zinc-900 p-4 text-sm leading-6 text-zinc-200">Checkout was cancelled — no payment was taken and your plan has not changed. You can start checkout again from your <Link href="/dashboard" class="underline text-emerald-300">dashboard</Link>.</div>
-        <div v-if="page.billing_enabled && page.billing_mode === 'test'" role="status" class="mb-6 rounded-lg border border-amber-500/60 bg-amber-950/40 p-4 text-sm leading-6 text-amber-200"><strong class="font-semibold">Stripe Test Mode</strong> — Paid plans use Stripe test checkout only. Use Stripe test card details; no real payment or live charge will be taken.</div>
+        <div v-if="page.billing_enabled && page.billing_mode === 'test'" role="status" class="mb-6 rounded-lg border border-amber-500/60 bg-amber-950/40 p-4 text-sm leading-6 text-amber-200"><strong class="font-semibold">Hosted Sandbox — Stripe Test Mode</strong> — Paid plans use Stripe test checkout only; live paid billing is not open yet. Use Stripe test card details; no real payment or live charge will be taken.</div>
+        <div v-if="selectedPlan && page.billing_enabled && page.billing_mode === 'test' && page.signed_in" role="status" class="mb-6 flex flex-wrap items-center justify-between gap-4 rounded-lg border border-emerald-500/60 bg-emerald-950/30 p-4 text-sm leading-6 text-emerald-100">
+          <p><strong class="font-semibold">{{ selectedPlan.name }} plan ready for test checkout.</strong> Start Stripe Test Mode checkout below (test card details only; no real charge).</p>
+          <button type="button" :disabled="checkoutPlan !== null" class="public-primary disabled:opacity-60" @click="startTestCheckout(selectedPlan.key)">{{ checkoutPlan === selectedPlan.key ? 'Opening Stripe…' : `Start ${selectedPlan.name} test checkout` }}</button>
+        </div>
         <p v-if="checkoutError" role="alert" class="mb-6 rounded-lg border border-red-800 bg-red-950/40 p-4 text-sm text-red-200">{{ checkoutError }}</p>
         <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <section v-for="plan in page.plans" :key="plan.key" :class="['public-panel flex flex-col', plan.key === 'pro' ? 'border-emerald-500/70' : '']">
+          <section v-for="plan in page.plans" :key="plan.key" :data-plan="plan.key" :class="['public-panel flex flex-col', selectedPlan?.key === plan.key ? 'border-emerald-400 ring-1 ring-emerald-400/60' : (plan.key === 'pro' ? 'border-emerald-500/70' : '')]">
             <h2 class="text-lg font-semibold">{{ plan.name }}</h2><p class="my-5"><span class="text-4xl font-semibold">${{ plan.price }}</span><span class="text-sm text-zinc-400"> / month</span></p>
             <ul class="mb-8 space-y-3 text-sm text-zinc-300"><li>{{ plan.requests.toLocaleString() }} requests / calendar month</li><li>Up to {{ plan.retention }} days retention</li><li>Capture, inspect, replay &amp; forward</li></ul>
-            <Link v-if="plan.price === 0" href="/register" class="public-primary mt-auto">Start free</Link>
-            <button v-else-if="page.billing_enabled && page.billing_mode === 'test' && page.signed_in" type="button" :disabled="checkoutPlan !== null" class="public-secondary mt-auto disabled:opacity-60" @click="startTestCheckout(plan.key)">{{ checkoutPlan === plan.key ? 'Opening Stripe…' : 'Test checkout' }}</button>
-            <Link v-else-if="page.billing_enabled && page.billing_mode === 'test'" href="/login" class="public-secondary mt-auto">Sign in for test checkout</Link>
-            <Link v-else-if="page.billing_enabled" href="/dashboard" class="public-secondary mt-auto">Continue to account</Link>
+            <Link v-if="plan.price === 0" :href="page.signed_in ? '/dashboard' : '/register'" class="public-primary mt-auto">{{ page.signed_in ? 'Open dashboard' : 'Start free' }}</Link>
+            <button v-else-if="page.billing_enabled && page.billing_mode === 'test' && page.signed_in" type="button" :disabled="checkoutPlan !== null" class="public-secondary mt-auto disabled:opacity-60" @click="startTestCheckout(plan.key)">{{ checkoutPlan === plan.key ? 'Opening Stripe…' : `Test checkout (${plan.name})` }}</button>
+            <Link v-else-if="page.billing_enabled && page.billing_mode === 'test'" :href="`/login?plan=${encodeURIComponent(plan.key)}`" class="public-secondary mt-auto">Sign in for {{ plan.name }} test checkout</Link>
+            <Link v-else-if="page.billing_enabled" :href="page.signed_in ? '/dashboard' : `/login?plan=${encodeURIComponent(plan.key)}`" class="public-secondary mt-auto">Continue to account</Link>
             <button v-else disabled class="public-secondary mt-auto opacity-60">Checkout unavailable</button>
           </section>
         </div>
@@ -75,11 +83,10 @@ onMounted(() => {
       <div v-else class="grid gap-10 lg:grid-cols-[14rem_minmax(0,1fr)] lg:gap-12">
         <aside><nav aria-label="On this page" class="sticky top-6 rounded-xl border border-zinc-800 p-4"><p class="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-400">On this page</p><a v-for="s in sections" :key="s.id" :href="'#' + s.id" class="flex min-h-11 items-center rounded px-2 text-sm text-zinc-300 hover:bg-zinc-900">{{ s.h }}</a></nav></aside>
         <article class="min-w-0 max-w-3xl space-y-10">
-          <div v-if="['privacy','terms'].includes(page.slug)" class="rounded-xl border border-amber-700 bg-amber-950/30 p-4 text-sm text-amber-200">Draft pending owner and legal review. This page is not the final policy.</div>
           <div v-if="page.slug === 'docs'" class="rounded-xl border border-amber-700 bg-amber-950/30 p-4 text-sm leading-7 text-amber-200">Receiver URLs are bearer capabilities. Anyone who knows the URL can submit requests; delete and recreate an endpoint to rotate.</div>
           <div v-if="page.slug === 'self-hosting'" class="rounded-xl border border-zinc-700 bg-zinc-900 p-4 text-sm leading-7 text-zinc-300 [overflow-wrap:anywhere]"><strong>Before using real payloads:</strong> Back up PostgreSQL and store the application encryption key separately in a secure location. Test recovery with both in an isolated instance. Retention pruning affects the live database, not existing backups; set a separate expiry policy for backups. See the repository README for the Docker quickstart and recovery checklist.</div>
           <p v-if="page.slug === 'security'" class="flex flex-wrap gap-3"><Link href="/docs" class="public-secondary">Documentation</Link><a href="https://github.com/untasked-hub/webhook-inspector" class="public-secondary">Public source repository ↗</a></p>
-          <section v-for="s in sections" :id="s.id" :key="s.id" class="scroll-mt-24 space-y-4"><h2 class="text-2xl font-semibold tracking-tight">{{ s.h }}</h2><p v-for="p in s.p" :key="p" class="leading-7 text-zinc-300 [overflow-wrap:anywhere]">{{ p }}</p><CodeBlock v-if="s.code" :code="s.code" :language="s.language" /></section>
+          <section v-for="s in sections" :id="s.id" :key="s.id" class="scroll-mt-24 space-y-4"><h2 class="text-2xl font-semibold tracking-tight">{{ s.h }}</h2><p v-for="p in (s.p || [])" :key="p" class="leading-7 text-zinc-300 [overflow-wrap:anywhere]">{{ p }}</p><ul v-if="s.list && s.list.length" class="list-disc space-y-3 pl-5 leading-7 text-zinc-300 [overflow-wrap:anywhere]"><li v-for="item in s.list" :key="item.label"><strong class="font-semibold text-zinc-100">{{ item.label }}</strong> {{ item.text }}</li></ul><div v-if="s.table" class="overflow-x-auto rounded-xl border border-zinc-800"><table class="w-full text-left text-sm"><thead class="border-b border-zinc-800 bg-zinc-900"><tr><th v-for="(header, idx) in s.table.headers" :key="header" scope="col" :class="['p-4 font-semibold', idx > 0 && s.table.align !== 'left' ? 'text-right' : '']">{{ header }}</th></tr></thead><tbody><tr v-for="row in s.table.rows" :key="row[0]" class="border-t border-zinc-800 align-top"><th scope="row" class="p-4 font-medium text-zinc-200">{{ row[0] }}</th><td v-for="(cell, idx) in row.slice(1)" :key="idx" :class="['p-4 text-zinc-300', s.table.align === 'left' ? 'leading-6' : 'text-right font-mono']">{{ cell }}</td></tr></tbody></table></div><p v-for="p in (s.after || [])" :key="p" class="leading-7 text-zinc-300 [overflow-wrap:anywhere]">{{ p }}</p><p v-if="s.links && s.links.length" class="flex flex-wrap gap-4 text-sm"><a v-for="link in s.links" :key="link.href" :href="link.href" target="_blank" rel="noopener noreferrer" class="underline text-emerald-300 hover:text-emerald-200">{{ link.label }} ↗</a></p><CodeBlock v-if="s.code" :code="s.code" :language="s.language" /></section>
         </article>
       </div>
     </div>

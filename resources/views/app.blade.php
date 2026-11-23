@@ -9,8 +9,8 @@
                 'pricing' => ['Pricing — Webhook Inspector', 'Compare managed webhook hosting plans or self-host the open-source edition.'],
                 'docs' => ['Documentation — Webhook Inspector', 'Learn to capture, inspect, forward and replay HTTP webhooks.'],
                 'self-hosting' => ['Self-hosting — Webhook Inspector', 'Deploy the open-source webhook inspector with Docker and PostgreSQL.'],
-                'privacy' => ['Privacy policy — Webhook Inspector', 'How Webhook Inspector handles sensitive webhook data. Draft pending legal review.'],
-                'terms' => ['Terms of service — Webhook Inspector', 'Terms for using Webhook Inspector. Draft pending legal review.'],
+                'privacy' => ['Webhook Inspector Privacy Policy', 'Privacy Policy for the hosted Webhook Inspector service operated by Drag’n Survey SAS.'],
+                'terms' => ['Webhook Inspector Terms of Service', 'Terms of Service for the hosted Webhook Inspector service operated by Drag’n Survey SAS.'],
             ];
             $seo = $metadata[request()->path()] ?? ['Webhook Inspector', 'Your private webhook workspace.'];
             $publicPage = isset($metadata[request()->path()]);
