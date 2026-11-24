@@ -12,21 +12,113 @@
             "inertia": "3.0.0",
             "tailwind": "4.0.0"
         },
-        "ui_kit": "none",
+        "ui_kit": "shadcn-vue",
         "icon_family": "lucide",
-        "deploy": "Single Fly machine via untasked.yaml; repo webhook-inspector linked to hosted app 01m6ztxwn14yesr13h5jrqnqez. Planner owns release_deploy/promote/publish.",
+        "deploy": "hosted-app",
         "guides": [
             {
-                "id": "untasked-deploy-contract",
-                "reviewed_at": "2026-11-08"
+                "id": "laravel-core",
+                "reviewed_at": "2026-10-28"
+            },
+            {
+                "id": "laravel-validation",
+                "reviewed_at": "2026-10-28"
+            },
+            {
+                "id": "laravel-auth",
+                "reviewed_at": "2026-11-13"
+            },
+            {
+                "id": "laravel-eloquent",
+                "reviewed_at": "2026-10-28"
+            },
+            {
+                "id": "laravel-migrations",
+                "reviewed_at": "2026-10-28"
+            },
+            {
+                "id": "laravel-jobs",
+                "reviewed_at": "2026-11-12"
+            },
+            {
+                "id": "laravel-events",
+                "reviewed_at": "2026-10-28"
+            },
+            {
+                "id": "laravel-storage",
+                "reviewed_at": "2026-10-28"
+            },
+            {
+                "id": "laravel-http",
+                "reviewed_at": "2026-11-13"
+            },
+            {
+                "id": "laravel-frontend",
+                "reviewed_at": "2026-10-30"
+            },
+            {
+                "id": "laravel-caching",
+                "reviewed_at": "2026-10-28"
+            },
+            {
+                "id": "laravel-testing",
+                "reviewed_at": "2026-10-28"
             },
             {
                 "id": "laravel-deployment",
                 "reviewed_at": "2026-11-08"
             },
             {
-                "id": "laravel-migrations",
+                "id": "vue-core",
+                "reviewed_at": "2026-10-30"
+            },
+            {
+                "id": "inertia-core",
+                "reviewed_at": "2026-11-13"
+            },
+            {
+                "id": "tailwind-core",
                 "reviewed_at": "2026-10-28"
+            },
+            {
+                "id": "shadcn-vue-core",
+                "reviewed_at": "2026-10-28"
+            },
+            {
+                "id": "lucide-core",
+                "reviewed_at": "2026-10-28"
+            },
+            {
+                "id": "playwright-core",
+                "reviewed_at": "2026-10-28"
+            },
+            {
+                "id": "untasked-app-create",
+                "reviewed_at": "2026-10-28"
+            },
+            {
+                "id": "untasked-app-up",
+                "reviewed_at": "2026-11-12"
+            },
+            {
+                "id": "untasked-repo-release",
+                "reviewed_at": "2026-10-28"
+            },
+            {
+                "id": "untasked-deploy-contract",
+                "reviewed_at": "2026-11-13"
+            },
+            {
+                "id": "untasked-domains",
+                "reviewed_at": "2026-11-13"
+            },
+            {
+                "id": "untasked-storage",
+                "reviewed_at": "2026-10-28"
+            },
+            {
+                "id": "untasked-secrets",
+                "reviewed_at": "2026-11-12"
             }
         ]
     }

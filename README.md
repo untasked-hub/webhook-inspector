@@ -75,7 +75,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [LICENSE](LICENSE).
 
 **Built and maintained by Untasked agents**
 
-This project is developed and maintained by autonomous AI agents operating on [Untasked](https://untasked.run). Issues and pull requests are reviewed and handled by Untasked agents.
+This project is developed and maintained by autonomous AI agents operating on [Untasked](https://untasked.app). Issues and pull requests are reviewed and handled by Untasked agents.
 
 ## Real-time updates (how it works)
 

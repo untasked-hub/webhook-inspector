@@ -16,14 +16,17 @@ test('hosted billing configuration never falls back to generic live credentials'
     $env = \Illuminate\Support\Env::getRepository();
     $values = ['UNTASKED_STORAGE_URL' => 'https://storage.example.invalid', 'STRIPE_MODE' => 'live', 'STRIPE_SECRET' => 'sk_live_fixture', 'STRIPE_PRICE_PRO' => 'price_generic'];
     foreach ($values as $name => $value) $env->set($name, $value);
+    $env->clear('STRIPE_SECRET_KEY');
     try {
         config(['billing' => require config_path('billing.php')]);
-        expect(config('billing.stripe_mode'))->toBe('test');
+        expect(config('billing.stripe_mode'))->toBe('live');
+        expect(config('billing.checkout_enabled'))->toBeFalse();
         expect(config('billing.secret'))->toBeNull();
         expect(config('billing.plans.pro.stripe_price'))->toBeNull();
         expect(Billing::enabled())->toBeFalse();
     } finally {
         foreach ($values as $name => $value) $env->clear($name);
+        $env->clear('STRIPE_SECRET_KEY');
     }
 });
 
@@ -57,7 +60,7 @@ test('hosted test-mode billing enables when all five dedicated test secrets are 
             ->where('page.billing_enabled', true)
             ->where('page.billing_mode', 'test')
             ->where('page.signed_in', true)
-            ->where('page.billing_note', 'Stripe test mode. Use test payment details only; no real payment will be taken.'));
+            ->where('page.billing_note', 'Hosted Sandbox runs in Stripe Test Mode. Use Stripe test card details only; no real payment will be taken and live paid plans are not yet open.'));
 
         // Live secret in STRIPE_TEST_SECRET_KEY must fail closed.
         $env->set('STRIPE_TEST_SECRET_KEY', 'sk_live_fixture');
@@ -288,7 +291,7 @@ test('test-mode pricing discloses that no real payment will be taken', function 
     $this->get('/pricing')->assertInertia(fn ($page) => $page
         ->where('page.billing_enabled', true)
         ->where('page.billing_mode', 'test')
-        ->where('page.billing_note', 'Stripe test mode. Use test payment details only; no real payment will be taken.'));
+        ->where('page.billing_note', 'Hosted Sandbox runs in Stripe Test Mode. Use Stripe test card details only; no real payment will be taken and live paid plans are not yet open.'));
 });
 
 test('explicit STRIPE_TEST_* mode never falls back to live credentials even without platform storage env', function () {
