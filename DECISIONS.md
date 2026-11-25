@@ -2,7 +2,7 @@
 
 ## Blueprint and rationale
 - Blueprint: `laravel-inertia-vue`
-- Rationale: Not needed
+- Rationale: Persistent multi-tenant SaaS (accounts, endpoints, captured requests, billing). Laravel + Inertia + Vue + PostgreSQL per mission preference.
 
 ## Runtimes and versions
 - laravel: 13.0.0
@@ -12,50 +12,30 @@
 - tailwind: 4.0.0
 
 ## Data, storage and deploy
-- Data: Use Untasked Postgres/storage when data must persist. Do not use localStorage as the database.
-- Deploy: hosted-app
+- Data: Hosted Postgres (DATABASE_URL runtime, MIGRATION_DATABASE_URL for migrations in CMD). Payload bodies stored encrypted (Laravel Crypt) in Postgres; bodies capped (default 1MB). Queue driver: database (no Redis on the single Fly machine; Redis optional for self-host). Retention purge via scheduled command.
+- Deploy: Single Fly machine via untasked.yaml; repo webhook-inspector linked to hosted app 01m6ztxwn14yesr13h5jrqnqez. Planner owns release_deploy/promote/publish.
 
 ## UI kit, icons and tokens
-- UI kit: shadcn-vue
+- UI kit: none
 - Icon family: lucide
 - Tokens: follow the starter design tokens; adapt identity to the product.
 
 ## Capabilities and licenses
-- (none yet)
+- Tailwind 4 via @tailwindcss/vite (starter)
+- Real-time: polling/SSE endpoint (no paid websocket service)
+- Stripe via stripe/stripe-php (MIT) only when STRIPE_SECRET present; billing degrades gracefully
+- SSRF guard: resolve DNS, block private/loopback/link-local/metadata IPs, http(s) only
 
 ## Contracts and exceptions
 - (none)
 
 ## Validation and known limitations
-- Validation: docker compose -f compose.yaml config; docker compose run --rm test php -d pcov.enabled=1 vendor/bin/pest --coverage --min=80 --coverage-text
+- Validation: Pest/PHPUnit feature tests, >=80% backend line coverage gate.
 - Limitations: Single Fly machine; no platform Redis/worker/scheduler by default. Migrations run in Dockerfile CMD.
 - Guides in use:
-- laravel-core
-- laravel-validation
-- laravel-auth
-- laravel-eloquent
-- laravel-migrations
-- laravel-jobs
-- laravel-events
-- laravel-storage
-- laravel-http
-- laravel-frontend
-- laravel-caching
-- laravel-testing
-- laravel-deployment
-- vue-core
-- inertia-core
-- tailwind-core
-- shadcn-vue-core
-- lucide-core
-- playwright-core
-- untasked-app-create
-- untasked-app-up
-- untasked-repo-release
 - untasked-deploy-contract
-- untasked-domains
-- untasked-storage
-- untasked-secrets
+- laravel-deployment
+- laravel-migrations
 
 ## Next delivery
 Ship the first useful vertical slice and verify the full user flow.

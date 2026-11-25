@@ -132,7 +132,7 @@ Owners/members can open **Bulk replay**, choose selected requests or all current
 
 ## Host handling
 
-`X-Forwarded-Host` is never trusted. `X-Untasked-Original-Host` (set by the untasked.run router) is honoured only when it matches `TRUSTED_ORIGINAL_HOSTS` (comma-separated, default `*.untasked.run`). Self-hosters behind their own proxy should leave it unset or set it to their own domain.
+`X-Forwarded-Host` is never trusted. `X-Untasked-Original-Host` (set by the Untasked hosting router) is honoured only when it matches `TRUSTED_ORIGINAL_HOSTS` (comma-separated, default `*.untasked.run`). Self-hosters behind their own proxy should leave it unset or set it to their own domain.
 
 ## Self-hosted backups and recovery
 

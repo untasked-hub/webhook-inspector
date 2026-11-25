@@ -6,45 +6,10 @@ import CodeBlock from '../Components/CodeBlock.vue'
 const props = defineProps({ page: Object })
 const sections = computed(() => props.page.sections.map((s, i) => ({ ...s, id: `section-${i + 1}` })))
 const checkoutCancelled = ref(false)
-const checkoutPlan = ref(null)
-const checkoutError = ref('')
 const selectedPlan = computed(() => {
   if (!props.page.plans || !props.page.selected_plan) return null
   return props.page.plans.find((p) => p.key === props.page.selected_plan && p.price > 0) || null
 })
-async function startTestCheckout(plan) {
-  if (checkoutPlan.value) return
-  checkoutPlan.value = plan
-  checkoutError.value = ''
-  try {
-    const response = await fetch('/api/billing/checkout', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        'X-XSRF-TOKEN': decodeURIComponent(document.cookie.match(/(?:^|; )XSRF-TOKEN=([^;]+)/)?.[1] ?? ''),
-      },
-      body: JSON.stringify({ plan }),
-    })
-    if (response.status === 401 || response.status === 419) {
-      window.location.assign(`/login?plan=${encodeURIComponent(plan)}`)
-      return
-    }
-    const data = await response.json().catch(() => ({}))
-    if (!response.ok) {
-      checkoutError.value = data.message || 'Could not start test checkout. Please try again.'
-      return
-    }
-    const destination = new URL(data.url)
-    if (destination.origin !== 'https://checkout.stripe.com') throw new Error('Invalid checkout destination')
-    window.location.assign(destination.href)
-  } catch {
-    checkoutError.value = 'Could not start test checkout. Please try again.'
-  } finally {
-    checkoutPlan.value = null
-  }
-}
 onMounted(() => {
   const params = new URLSearchParams(window.location.search)
   if (params.get('checkout') === 'cancelled') checkoutCancelled.value = true
@@ -57,21 +22,18 @@ onMounted(() => {
     <div class="mx-auto max-w-7xl px-4 py-12 sm:px-6 sm:py-16">
       <header class="mb-10 max-w-3xl"><p class="mb-3 text-sm font-medium uppercase tracking-widest text-emerald-300">{{ page.eyebrow || (page.slug === 'pricing' ? 'Managed hosting' : 'Resources') }}</p><h1 class="text-3xl font-semibold tracking-tight sm:text-5xl">{{ page.slug === 'pricing' ? 'Plans for every stage' : page.title }}</h1><p v-if="page.version" class="mt-3 text-sm font-medium text-zinc-400">{{ page.version }}</p><p class="mt-5 text-lg leading-8 text-zinc-400">{{ page.description }}</p></header>
       <template v-if="page.plans">
-        <div v-if="checkoutCancelled" role="status" class="mb-6 rounded-lg border border-zinc-700 bg-zinc-900 p-4 text-sm leading-6 text-zinc-200">Checkout was cancelled — no payment was taken and your plan has not changed. You can start checkout again from your <Link href="/dashboard" class="underline text-emerald-300">dashboard</Link>.</div>
+        <div v-if="checkoutCancelled" role="status" class="mb-6 rounded-lg border border-zinc-700 bg-zinc-900 p-4 text-sm leading-6 text-zinc-200">Checkout was cancelled — no payment was taken and your plan has not changed. You can start checkout again from the <Link href="/billing/upgrade" class="underline text-emerald-300">upgrade page</Link>.</div>
         <div v-if="page.billing_enabled && page.billing_mode === 'test'" role="status" class="mb-6 rounded-lg border border-amber-500/60 bg-amber-950/40 p-4 text-sm leading-6 text-amber-200"><strong class="font-semibold">Hosted Sandbox — Stripe Test Mode</strong> — Paid plans use Stripe test checkout only; live paid billing is not open yet. Use Stripe test card details; no real payment or live charge will be taken.</div>
-        <div v-if="selectedPlan && page.billing_enabled && page.billing_mode === 'test' && page.signed_in" role="status" class="mb-6 flex flex-wrap items-center justify-between gap-4 rounded-lg border border-emerald-500/60 bg-emerald-950/30 p-4 text-sm leading-6 text-emerald-100">
-          <p><strong class="font-semibold">{{ selectedPlan.name }} plan ready for test checkout.</strong> Start Stripe Test Mode checkout below (test card details only; no real charge).</p>
-          <button type="button" :disabled="checkoutPlan !== null" class="public-primary disabled:opacity-60" @click="startTestCheckout(selectedPlan.key)">{{ checkoutPlan === selectedPlan.key ? 'Opening Stripe…' : `Start ${selectedPlan.name} test checkout` }}</button>
+        <div v-if="selectedPlan && page.billing_enabled" role="status" class="mb-6 flex flex-wrap items-center justify-between gap-4 rounded-lg border border-emerald-500/60 bg-emerald-950/30 p-4 text-sm leading-6 text-emerald-100">
+          <p><strong class="font-semibold">{{ selectedPlan.name }} plan selected.</strong> Continue to the upgrade page to agree to the Terms of Service and start Stripe{{ page.billing_mode === 'test' ? ' Test Mode' : '' }} checkout.</p>
+          <Link :href="`/billing/upgrade?plan=${encodeURIComponent(selectedPlan.key)}`" class="public-primary">{{ page.billing_mode === 'test' ? `Continue to ${selectedPlan.name} test checkout` : `Upgrade to ${selectedPlan.name}` }}</Link>
         </div>
-        <p v-if="checkoutError" role="alert" class="mb-6 rounded-lg border border-red-800 bg-red-950/40 p-4 text-sm text-red-200">{{ checkoutError }}</p>
         <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <section v-for="plan in page.plans" :key="plan.key" :data-plan="plan.key" :class="['public-panel flex flex-col', selectedPlan?.key === plan.key ? 'border-emerald-400 ring-1 ring-emerald-400/60' : (plan.key === 'pro' ? 'border-emerald-500/70' : '')]">
             <h2 class="text-lg font-semibold">{{ plan.name }}</h2><p class="my-5"><span class="text-4xl font-semibold">${{ plan.price }}</span><span class="text-sm text-zinc-400"> / month</span></p>
             <ul class="mb-8 space-y-3 text-sm text-zinc-300"><li>{{ plan.requests.toLocaleString() }} requests / calendar month</li><li>Up to {{ plan.retention }} days retention</li><li>Capture, inspect, replay &amp; forward</li></ul>
             <Link v-if="plan.price === 0" :href="page.signed_in ? '/dashboard' : '/register'" class="public-primary mt-auto">{{ page.signed_in ? 'Open dashboard' : 'Start free' }}</Link>
-            <button v-else-if="page.billing_enabled && page.billing_mode === 'test' && page.signed_in" type="button" :disabled="checkoutPlan !== null" class="public-secondary mt-auto disabled:opacity-60" @click="startTestCheckout(plan.key)">{{ checkoutPlan === plan.key ? 'Opening Stripe…' : `Test checkout (${plan.name})` }}</button>
-            <Link v-else-if="page.billing_enabled && page.billing_mode === 'test'" :href="`/login?plan=${encodeURIComponent(plan.key)}`" class="public-secondary mt-auto">Sign in for {{ plan.name }} test checkout</Link>
-            <Link v-else-if="page.billing_enabled" :href="page.signed_in ? '/dashboard' : `/login?plan=${encodeURIComponent(plan.key)}`" class="public-secondary mt-auto">Continue to account</Link>
+            <Link v-else-if="page.billing_enabled" :href="`/billing/upgrade?plan=${encodeURIComponent(plan.key)}`" class="public-secondary mt-auto">{{ page.billing_mode === 'test' ? `Test checkout (${plan.name})` : `Upgrade to ${plan.name}` }}</Link>
             <button v-else disabled class="public-secondary mt-auto opacity-60">Checkout unavailable</button>
           </section>
         </div>

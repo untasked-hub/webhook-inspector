@@ -14,6 +14,7 @@ Route::get('/', [DashboardController::class, 'home'])->name('home');
 Route::get('/api/health', \App\Http\Controllers\HealthController::class)->middleware('throttle:60,1');
 Route::get('/favicon.ico', fn () => response(file_get_contents(public_path('favicon.svg')), 200, ['Content-Type' => 'image/svg+xml', 'Cache-Control' => 'public, max-age=86400']));
 Route::get('/{slug}', [\App\Http\Controllers\PagesController::class, 'show'])->whereIn('slug', ['pricing', 'docs', 'self-hosting', 'privacy', 'terms', 'security']);
+Route::get('/billing/upgrade', [\App\Http\Controllers\BillingController::class, 'upgrade'])->name('billing.upgrade');
 Route::middleware('guest')->group(function () {
     Route::get('/login', [InspectorController::class, 'authPage'])->name('login');
     Route::get('/register', [InspectorController::class, 'authPage']);

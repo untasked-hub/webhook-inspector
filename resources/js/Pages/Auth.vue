@@ -2,8 +2,17 @@
 import PublicLayout from '../Components/PublicLayout.vue'
 import { Head, useForm, Link, router } from '@inertiajs/vue3'
 import { ref, onMounted, onUnmounted } from 'vue'
-const props = defineProps<{ mode: 'login' | 'register' }>()
-const form = useForm({ name: '', email: '', password: '', password_confirmation: '' })
+const props = defineProps<{
+  mode: 'login' | 'register'
+  selected_plan?: string | null
+  selected_plan_name?: string | null
+  billing_enabled?: boolean
+  billing_mode?: string | null
+}>()
+const form = useForm({ name: '', email: '', password: '', password_confirmation: '', plan: props.selected_plan ?? '' })
+const switchHref = props.selected_plan
+  ? `${props.mode === 'register' ? '/login' : '/register'}?plan=${encodeURIComponent(props.selected_plan)}`
+  : (props.mode === 'register' ? '/login' : '/register')
 const networkError = ref('')
 let removeExceptionListener: (() => void) | undefined
 onMounted(() => {
@@ -30,6 +39,11 @@ const submit = () => {
       <p v-if="Object.keys(form.errors).length" role="alert" class="rounded border border-red-500/50 bg-red-950/40 p-2 text-sm text-red-300">Please fix the errors below and try again.</p>
       <Link href="/" class="text-sm text-emerald-400 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-400">← Webhook Inspector</Link>
       <h1 class="text-2xl font-semibold">{{ mode === 'register' ? 'Create your account' : 'Log in' }}</h1>
+      <p v-if="selected_plan_name && billing_enabled" role="status" class="rounded-lg border border-amber-500/50 bg-amber-950/30 p-3 text-sm leading-6 text-amber-200">
+        <strong class="font-semibold">{{ selected_plan_name }} plan selected.</strong>
+        <span v-if="billing_mode === 'test'"> {{ mode === 'register' ? 'Create an account' : 'Sign in' }} to continue directly to the {{ selected_plan_name }} upgrade page (Stripe Test Mode — test cards only; no real charge).</span>
+        <span v-else> {{ mode === 'register' ? 'Create an account' : 'Sign in' }} to continue directly to the {{ selected_plan_name }} upgrade page.</span>
+      </p>
       <div v-if="mode === 'register'" class="space-y-1">
         <label for="name" class="block text-sm font-medium">Name</label>
         <input id="name" v-model="form.name" autocomplete="name" required :aria-invalid="!!form.errors.name" :aria-describedby="form.errors.name ? 'name-error' : undefined" class="w-full rounded bg-zinc-900 border border-zinc-700 p-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-400" />
@@ -52,7 +66,7 @@ const submit = () => {
         <p v-if="form.errors.password_confirmation" id="confirmation-error" class="text-sm text-red-400" role="alert">{{ form.errors.password_confirmation }}</p>
       </div>
       <button :disabled="form.processing" class="w-full rounded bg-emerald-500 p-2 font-medium text-zinc-950 disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-400">{{ form.processing ? 'Please wait…' : mode === 'register' ? 'Sign up' : 'Log in' }}</button>
-      <Link :href="mode === 'register' ? '/login' : '/register'" class="block text-sm text-zinc-400 hover:text-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-400">{{ mode === 'register' ? 'Have an account? Log in' : 'New here? Sign up' }}</Link>
+      <Link :href="switchHref" class="block text-sm text-zinc-400 hover:text-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-400">{{ mode === 'register' ? 'Have an account? Log in' : 'New here? Sign up' }}</Link>
     </form>
   </div>
   </PublicLayout>

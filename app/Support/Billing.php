@@ -7,6 +7,9 @@ use Illuminate\Support\Carbon;
 
 class Billing
 {
+    public const TOS_VERSION = '2026-11-23';
+    public const TOS_VERSION_LABEL = '23 November 2026';
+
     public static function enabled(): bool
     {
         return !in_array(false, self::configurationChecks(), true);

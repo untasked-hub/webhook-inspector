@@ -7,9 +7,54 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Carbon;
+use Inertia\Inertia;
 
 class BillingController extends Controller
 {
+    public function upgrade(Request $request)
+    {
+        $rawPlan = $request->query('plan');
+        $validPlan = is_string($rawPlan) && in_array($rawPlan, ['developer', 'pro', 'team'], true) ? $rawPlan : null;
+
+        if (! $request->user()) {
+            return redirect($validPlan ? '/login?plan='.rawurlencode($validPlan) : '/login');
+        }
+
+        $userId = $request->user()->id;
+        $account = DB::table('billing_accounts')->where('user_id', $userId)->first();
+        $enabled = Billing::enabled();
+        $status = $account->status ?? 'none';
+        $paidUntil = $account && $account->paid_until ? Carbon::parse($account->paid_until)->toIso8601ZuluString() : null;
+
+        $plans = collect(config('billing.plans'))
+            ->filter(fn ($p, $key) => in_array($key, ['developer', 'pro', 'team'], true))
+            ->map(fn ($p, $key) => [
+                'key' => $key,
+                'name' => $p['name'],
+                'price' => $p['price'],
+                'requests' => $p['requests'],
+                'retention' => $p['retention'],
+            ])
+            ->values()
+            ->all();
+
+        return Inertia::render('BillingUpgrade', [
+            'plans' => $plans,
+            'selected_plan' => $validPlan ?? 'developer',
+            'billing_enabled' => $enabled,
+            'billing_mode' => $enabled ? config('billing.stripe_mode') : null,
+            'managed' => (bool) config('billing.managed'),
+            'current_plan' => Billing::plan($userId),
+            'subscription_status' => $status,
+            'cancel_at_period_end' => (bool) ($account->cancel_at_period_end ?? false),
+            'renews_at' => $paidUntil,
+            'has_billing_account' => (bool) ($account && $account->customer_id),
+            'has_active_paid_sub' => (bool) ($account && in_array($account->status, ['active', 'trialing', 'past_due', 'unpaid', 'incomplete'], true)),
+            'tos_version' => Billing::TOS_VERSION,
+            'tos_version_label' => Billing::TOS_VERSION_LABEL,
+            'checkout_cancelled' => $request->query('checkout') === 'cancelled',
+        ]);
+    }
     public function usage(Request $request)
     {
         $id = $request->user()->id;
@@ -62,18 +107,47 @@ class BillingController extends Controller
     public function checkout(Request $request)
     {
         abort_unless(Billing::enabled(), 503, 'Managed billing is not configured. No payment has been taken.');
-        $data = $request->validate(['plan' => 'required|in:developer,pro,team']);
+        $data = $request->validate([
+            'plan' => 'required|in:developer,pro,team',
+            'tos_accepted' => 'required|accepted',
+        ], [
+            'tos_accepted.required' => 'You must agree to the Terms of Service before starting checkout.',
+            'tos_accepted.accepted' => 'You must agree to the Terms of Service before starting checkout.',
+        ]);
         $userId = $request->user()->id;
-        DB::table('billing_accounts')->insertOrIgnore(['user_id' => $userId, 'plan' => 'free', 'status' => 'none', 'created_at' => now(), 'updated_at' => now()]);
+        $tosAcceptedAt = now();
+        DB::table('billing_accounts')->insertOrIgnore(['user_id' => $userId, 'plan' => 'free', 'status' => 'none', 'created_at' => $tosAcceptedAt, 'updated_at' => $tosAcceptedAt]);
         $account = DB::table('billing_accounts')->where('user_id', $userId)->first();
         abort_if(in_array($account->status, ['active', 'trialing', 'past_due', 'unpaid', 'incomplete']), 409, 'Use the billing portal to manage an existing subscription.');
         if (!$account->customer_id) {
             $customer = $this->stripe('POST', 'customers', ['metadata' => ['user_id' => (string) $userId]], 'customer-'.$userId);
             abort_unless(is_string($customer['id'] ?? null) && preg_match('/\Acus_[A-Za-z0-9_]+\z/', $customer['id']) === 1, 503, 'Billing provider response could not be verified.');
-            DB::table('billing_accounts')->where('user_id', $userId)->update(['customer_id' => $customer['id'], 'updated_at' => now()]);
+            DB::table('billing_accounts')->where('user_id', $userId)->update([
+                'customer_id' => $customer['id'],
+                'tos_accepted_at' => $tosAcceptedAt,
+                'tos_version' => Billing::TOS_VERSION,
+                'updated_at' => $tosAcceptedAt,
+            ]);
             $customerId = $customer['id'];
-        } else $customerId = $account->customer_id;
-        $session = $this->stripe('POST', 'checkout/sessions', ['mode' => 'subscription', 'customer' => $customerId, 'client_reference_id' => (string) $userId, 'line_items' => [['price' => config('billing.plans.'.$data['plan'].'.stripe_price'), 'quantity' => 1]], 'success_url' => url('/dashboard').'?checkout=complete&session_id={CHECKOUT_SESSION_ID}', 'cancel_url' => url('/pricing').'?checkout=cancelled', 'subscription_data' => ['metadata' => ['user_id' => (string) $userId]]], 'checkout-'.$userId.'-'.$data['plan'].'-'.intdiv(time(), 1800));
+        } else {
+            DB::table('billing_accounts')->where('user_id', $userId)->update([
+                'tos_accepted_at' => $tosAcceptedAt,
+                'tos_version' => Billing::TOS_VERSION,
+                'updated_at' => $tosAcceptedAt,
+            ]);
+            $customerId = $account->customer_id;
+        }
+        $tosIso = $tosAcceptedAt->toIso8601ZuluString();
+        $session = $this->stripe('POST', 'checkout/sessions', [
+            'mode' => 'subscription',
+            'customer' => $customerId,
+            'client_reference_id' => (string) $userId,
+            'line_items' => [['price' => config('billing.plans.'.$data['plan'].'.stripe_price'), 'quantity' => 1]],
+            'success_url' => url('/dashboard').'?checkout=complete&session_id={CHECKOUT_SESSION_ID}',
+            'cancel_url' => url('/billing/upgrade').'?plan='.rawurlencode($data['plan']).'&checkout=cancelled',
+            'metadata' => ['user_id' => (string) $userId, 'tos_version' => Billing::TOS_VERSION, 'tos_accepted_at' => $tosIso],
+            'subscription_data' => ['metadata' => ['user_id' => (string) $userId, 'tos_version' => Billing::TOS_VERSION, 'tos_accepted_at' => $tosIso]],
+        ], 'checkout-'.$userId.'-'.$data['plan'].'-'.intdiv(time(), 1800));
         return $this->sessionResponse($session, 'checkout.stripe.com');
     }
 

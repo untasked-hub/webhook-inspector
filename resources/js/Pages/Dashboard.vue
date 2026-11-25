@@ -160,7 +160,9 @@ const api = (url: string, init: RequestInit = {}) =>
   fetch(url, { credentials: 'same-origin', ...init, headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-XSRF-TOKEN': xsrf(), ...(init.headers || {}) } })
 
 const activeEndpoint = computed(() => endpoints.value.find(e => e.id === activeEndpointId.value))
-const projectRole = computed(() => projects.value.find(p => p.id === selectedProjectId.value)?.role)
+const selectedProject = computed(() => projects.value.find(p => p.id === selectedProjectId.value))
+const projectRole = computed(() => selectedProject.value?.role)
+const activeRetentionLimit = computed(() => Math.min(365, selectedProject.value?.retention_limit ?? usage.value?.limits?.retention ?? 7))
 const canEdit = computed(() => !!activeEndpoint.value && ['owner', 'member'].includes(projectRole.value))
 const team = ref<any>({ members: [], invitations: [] }), showTeam = ref(false), inviteRole = ref('viewer'), inviteUrl = ref('')
 const pendingInvite = ref(new URLSearchParams(location.hash.slice(1)).get('invite') || '')
@@ -216,7 +218,7 @@ const prettyBody = computed(() => {
 })
 const filteredBody = computed(() => !search.value ? prettyBody.value : prettyBody.value.split('\n').filter(l => l.toLowerCase().includes(search.value.toLowerCase())).join('\n'))
 
-const historyQuery = ref(''), deliveryStatus = ref(''), analytics = ref<any>(null), showAnalytics = ref(false), renameValue = ref('')
+const historyQuery = ref(''), deliveryStatus = ref(''), analytics = ref<any>(null), showAnalytics = ref(false), analyticsDays = ref(14), analyticsProjectId = ref<number | ''>(''), renameValue = ref('')
 const escapeHtml = (v: string) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 function highlightJson(text: string): string {
   let parsed = true
@@ -249,7 +251,12 @@ const curlCommand = computed(() => {
   const body = decodedBody.value ? ` \\\n  --data-raw ${shq(decodedBody.value)}` : ''
   return `curl -X ${detail.value.request.method} ${shq(url)}${headers}${body}`
 })
-async function loadAnalytics() { const r = await api('/api/analytics?days=14'); if (r.ok) analytics.value = await r.json() }
+async function loadAnalytics() {
+  const params = new URLSearchParams({ days: String(analyticsDays.value) })
+  if (analyticsProjectId.value !== '') params.set('project_id', String(analyticsProjectId.value))
+  const r = await api(`/api/analytics?${params}`)
+  if (r.ok) analytics.value = await r.json()
+}
 const maxDaily = computed(() => Math.max(1, ...(analytics.value?.daily || []).map((d: any) => d.requests)))
 async function renameProject() {
   if (!selectedProjectId.value || !renameValue.value.trim()) return
@@ -400,15 +407,15 @@ async function replay() {
   if (await action(`/api/endpoints/${activeEndpointId.value}/requests/${selectedId.value}/replay`, 'POST', {url: replayUrl.value, confirm: replayConfirmed.value}, 'Replay queued. Check delivery history for its result.')) await loadSettings()
   loading.value = false; replayConfirmed.value = false
 }
-async function openBilling(plan?: string) {
+async function openBilling() {
   if (!usage.value?.billing_enabled || billingBusy.value) return
   billingBusy.value = true; error.value = ''; notice.value = ''
   try {
-    const r = await api(plan ? '/api/billing/checkout' : '/api/billing/portal', { method: 'POST', body: JSON.stringify(plan ? { plan } : {}) })
+    const r = await api('/api/billing/portal', { method: 'POST', body: JSON.stringify({}) })
     const data = await r.json().catch(() => ({}))
     if (!r.ok) { error.value = data.message || 'Billing is unavailable. Please try again.'; return }
     const destination = new URL(data.url)
-    if (destination.protocol !== 'https:' || !['checkout.stripe.com', 'billing.stripe.com'].includes(destination.hostname)) throw new Error('Unexpected billing destination')
+    if (destination.protocol !== 'https:' || destination.hostname !== 'billing.stripe.com') throw new Error('Unexpected billing destination')
     window.location.assign(destination.href)
   } catch { error.value = 'Billing could not be opened. Please try again.' }
   finally { billingBusy.value = false }
@@ -459,13 +466,29 @@ onUnmounted(() => { clearInterval(timer); if (checkoutPollTimer) clearTimeout(ch
       <h2 class="font-semibold">Project team</h2><p class="text-sm text-zinc-400">Members can edit endpoints and replay requests. Viewers can inspect and export only. Only owners manage projects and access. Invitations expire in 24 hours and work once; share privately.</p>
       <form class="flex gap-3" @submit.prevent="createInvite"><select v-model="inviteRole" aria-label="Invitation role" class="rounded bg-zinc-900 p-2"><option value="viewer">Viewer</option><option value="member">Member</option></select><button class="public-primary" :disabled="teamBusy || teamState !== 'ready'">{{ teamBusy ? 'Creating invitation…' : 'Create invitation link' }}</button></form>
       <div v-if="inviteUrl" class="rounded border border-amber-800 p-3 text-sm"><p>Copy this private link now. It cannot be retrieved again.</p><input :value="inviteUrl" readonly aria-label="Private invitation link" class="w-full bg-zinc-900 p-2 my-2" /><button @click="copyText(inviteUrl, 'invite')">{{ copied === 'invite' ? 'Copied' : 'Copy invitation link' }}</button></div>
-      <div v-for="m in team.members" :key="m.id" class="flex gap-3 items-center text-sm"><span>Membership #{{ m.id }}</span><select :value="m.role" aria-label="Member role" class="bg-zinc-900 p-2" @change="teamAction(`members/${m.id}`, 'PATCH', { role: ($event.target as HTMLSelectElement).value })"><option value="member">Member</option><option value="viewer">Viewer</option></select><button class="text-red-300" @click="teamAction(`members/${m.id}`, 'DELETE')">Remove member</button></div>
+      <div v-for="m in team.members" :key="m.id" class="flex flex-wrap gap-3 items-center text-sm"><span class="font-medium text-zinc-100">{{ m.name || `Membership #${m.id}` }}</span><span class="text-xs text-zinc-400">Joined {{ String(m.created_at || '').slice(0, 10) }}</span><select :value="m.role" aria-label="Member role" class="rounded border border-zinc-700 bg-zinc-900 p-2" @change="teamAction(`members/${m.id}`, 'PATCH', { role: ($event.target as HTMLSelectElement).value })"><option value="member">Member</option><option value="viewer">Viewer</option></select><button class="text-red-300 hover:underline" @click="teamAction(`members/${m.id}`, 'DELETE')">Remove member</button></div>
       <p v-if="teamState === 'loading'" role="status" class="text-sm text-zinc-400">Loading project team…</p>
       <button v-if="teamState === 'error'" @click="loadTeam" class="text-sm underline">Retry team</button>
       <p v-if="teamState === 'ready' && !team.members.length" class="text-sm text-zinc-400">No members yet.</p>
       <div v-for="i in team.invitations" :key="i.id" class="flex gap-3 text-sm"><span>Pending {{ i.role }} invitation · expires {{ i.expires_at }}</span><button class="text-red-300" @click="teamAction(`invitations/${i.id}`, 'DELETE')">Revoke invitation</button></div>
     </section>
     <section v-if="showAnalytics" class="border-b border-zinc-800 px-6 py-4" aria-label="Usage analytics">
+      <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div class="flex flex-wrap items-center gap-2 text-xs">
+          <label for="analytics-days" class="text-zinc-400">Window</label>
+          <select id="analytics-days" v-model.number="analyticsDays" class="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-100" @change="loadAnalytics">
+            <option :value="7">Last 7 days</option>
+            <option :value="14">Last 14 days</option>
+            <option :value="30">Last 30 days</option>
+            <option :value="90">Last 90 days</option>
+          </select>
+          <label for="analytics-project" class="ml-2 text-zinc-400">Project</label>
+          <select id="analytics-project" v-model="analyticsProjectId" class="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-100" @change="loadAnalytics">
+            <option value="">All projects (owned &amp; shared)</option>
+            <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }} ({{ p.role }})</option>
+          </select>
+        </div>
+      </div>
       <div v-if="analytics" class="grid gap-6 md:grid-cols-3">
         <div class="md:col-span-2">
           <h2 class="text-xs font-semibold uppercase text-zinc-400">Requests per day (last {{ analytics.days }} days, retained captures)</h2>
@@ -479,7 +502,8 @@ onUnmounted(() => { clearInterval(timer); if (checkoutPollTimer) clearTimeout(ch
           <p>{{ analytics.usage.requests.toLocaleString() }} / {{ formatQuota(analytics.usage.limit) }} requests</p>
           <div v-if="Number.isSafeInteger(analytics.usage.limit)" class="h-2 rounded bg-zinc-800"><div class="h-2 rounded bg-emerald-500" :style="{ width: `${Math.min(100, (analytics.usage.requests / Math.max(1, analytics.usage.limit)) * 100)}%` }"></div></div>
           <h2 class="pt-2 text-xs font-semibold uppercase text-zinc-400">Per endpoint</h2>
-          <ul class="space-y-1 text-xs"><li v-for="e in analytics.endpoints" :key="e.id" class="flex justify-between"><span>{{ e.project }} / {{ e.name }} <span class="text-zinc-400">({{ e.retention_days }}d retention)</span></span><span class="font-mono">{{ e.requests }}</span></li></ul>
+          <ul class="space-y-1 text-xs"><li v-for="e in analytics.endpoints" :key="e.id" class="flex justify-between gap-2"><span>{{ e.project }} / {{ e.name }} <span class="text-zinc-400">({{ e.retention_days }}d/{{ e.retention_limit }}d · {{ e.role }})</span></span><span class="font-mono">{{ e.requests }}</span></li></ul>
+          <p v-if="!analytics.endpoints.length" class="text-xs text-zinc-400">No endpoints in this scope.</p>
           <p v-if="Object.keys(analytics.deliveries).length" class="text-xs text-zinc-400">Deliveries: <span v-for="(n, k) in analytics.deliveries" :key="k" class="mr-2">{{ k }} {{ n }}</span></p>
           <p class="text-[11px] text-zinc-400">{{ analytics.note }}</p>
         </div>
@@ -499,7 +523,7 @@ onUnmounted(() => { clearInterval(timer); if (checkoutPollTimer) clearTimeout(ch
         <div v-if="usage.managed && usage.billing_enabled" class="flex flex-wrap items-center gap-2">
           <button v-if="usage.has_billing_account" :disabled="billingBusy" class="rounded border border-emerald-600/70 bg-emerald-950/60 px-3 py-1.5 text-xs font-medium text-emerald-200 hover:bg-emerald-900/60 disabled:opacity-50" @click="openBilling()">{{ billingBusy ? 'Opening portal…' : 'Manage billing' }}</button>
           <template v-if="!hasActivePaidSub">
-            <button v-for="plan in ['developer','pro','team']" :key="plan" :disabled="billingBusy" class="rounded bg-zinc-800 px-3 py-1.5 text-xs capitalize text-zinc-200 hover:bg-zinc-700 disabled:opacity-50" @click="openBilling(plan)">{{ usage.billing_mode === 'test' ? plan + ' test checkout' : 'Upgrade to ' + plan }}</button>
+            <Link v-for="plan in ['developer','pro','team']" :key="plan" :href="`/billing/upgrade?plan=${plan}`" class="rounded bg-zinc-800 px-3 py-1.5 text-xs capitalize text-zinc-200 hover:bg-zinc-700">{{ usage.billing_mode === 'test' ? plan + ' test checkout' : 'Upgrade to ' + plan }}</Link>
           </template>
         </div>
       </div>
@@ -585,7 +609,7 @@ onUnmounted(() => { clearInterval(timer); if (checkoutPollTimer) clearTimeout(ch
           </form>
           <form v-if="canEdit" class="flex items-center gap-2" @submit.prevent="saveRetention">
             <label for="retention" class="text-xs text-zinc-400">Retain for</label>
-            <select id="retention" v-model.number="retentionDays" class="rounded bg-zinc-900 border border-zinc-700 p-1 text-xs"><option v-for="d in Math.min(365, usage?.limits?.retention ?? 7)" :key="d" :value="d">{{ d }} {{ d === 1 ? 'day' : 'days' }}</option></select>
+            <select id="retention" v-model.number="retentionDays" class="rounded bg-zinc-900 border border-zinc-700 p-1 text-xs"><option v-for="d in activeRetentionLimit" :key="d" :value="d">{{ d }} {{ d === 1 ? 'day' : 'days' }}</option></select>
             <button class="rounded bg-zinc-800 px-2 py-1 text-xs">Save</button>
           </form>
           

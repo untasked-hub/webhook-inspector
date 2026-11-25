@@ -216,19 +216,30 @@ test('checkout and portal use tenant customer and do not enable a plan from brow
         if (str_ends_with($req->url(), '/checkout/sessions')) return Http::response(['url' => 'https://checkout.stripe.com/fixture', 'livemode' => false]);
         return Http::response(['url' => 'https://billing.stripe.com/fixture', 'livemode' => false]);
     });
-    $this->postJson('/api/billing/checkout', ['plan' => 'bad'])->assertUnprocessable();
+    $this->postJson('/api/billing/checkout', ['plan' => 'bad', 'tos_accepted' => true])->assertUnprocessable();
+    $this->postJson('/api/billing/checkout', ['plan' => 'developer'])->assertUnprocessable()->assertJsonValidationErrors(['tos_accepted']);
+    $this->postJson('/api/billing/checkout', ['plan' => 'developer', 'tos_accepted' => false])->assertUnprocessable()->assertJsonValidationErrors(['tos_accepted']);
+    Http::assertNothingSent();
     $this->postJson('/api/billing/portal')->assertStatus(409);
-    $this->postJson('/api/billing/checkout', ['plan' => 'developer'])->assertOk()->assertJsonPath('url', 'https://checkout.stripe.com/fixture');
-    $this->postJson('/api/billing/checkout', ['plan' => 'developer'])->assertOk();
+    $this->postJson('/api/billing/checkout', ['plan' => 'developer', 'tos_accepted' => true])->assertOk()->assertJsonPath('url', 'https://checkout.stripe.com/fixture');
+    $this->postJson('/api/billing/checkout', ['plan' => 'developer', 'tos_accepted' => true])->assertOk();
     $this->postJson('/api/billing/portal')->assertOk()->assertHeader('Cache-Control', 'no-store, private');
     $this->getJson('/api/usage')->assertJsonPath('billing_mode', 'test');
     expect(Billing::plan($user->id))->toBe('free');
-    Http::assertSent(fn ($r) => str_ends_with($r->url(), 'checkout/sessions') && $r['customer'] === 'cus_fixture' && $r['line_items'][0]['price'] === 'price_dev');
+    $acct = DB::table('billing_accounts')->where('user_id', $user->id)->first();
+    expect($acct->tos_accepted_at)->not->toBeNull();
+    expect($acct->tos_version)->toBe(Billing::TOS_VERSION);
+    Http::assertSent(fn ($r) => str_ends_with($r->url(), 'checkout/sessions')
+        && $r['customer'] === 'cus_fixture'
+        && $r['line_items'][0]['price'] === 'price_dev'
+        && ($r['metadata']['tos_version'] ?? null) === Billing::TOS_VERSION
+        && ! empty($r['metadata']['tos_accepted_at'])
+        && str_contains((string) ($r['cancel_url'] ?? ''), '/billing/upgrade?plan=developer&checkout=cancelled'));
     foreach (Http::recorded() as [$request]) {
         expect($request->hasHeader('Stripe-Version', '2025-03-31.basil'))->toBeTrue();
     }
     DB::table('billing_accounts')->where('user_id', $user->id)->update(['status' => 'active']);
-    $this->postJson('/api/billing/checkout', ['plan' => 'pro'])->assertStatus(409);
+    $this->postJson('/api/billing/checkout', ['plan' => 'pro', 'tos_accepted' => true])->assertStatus(409);
     DB::table('billing_accounts')->where('user_id', $user->id)->update(['status' => 'none']);
     $fail = true;
     $this->postJson('/api/billing/portal')->assertStatus(503)->assertDontSee('sensitive-provider-error');
@@ -349,11 +360,11 @@ test('checkout rejects provider responses in the wrong mode and invalid session 
             ? Http::response(['id' => 'cus_fixture', 'livemode' => $customerLive])
             : Http::response(['url' => 'https://example.invalid/session', 'livemode' => false]);
     });
-    $this->postJson('/api/billing/checkout', ['plan' => 'pro'])->assertStatus(503);
+    $this->postJson('/api/billing/checkout', ['plan' => 'pro', 'tos_accepted' => true])->assertStatus(503);
     $this->assertDatabaseHas('billing_accounts', ['user_id' => $user->id, 'customer_id' => null]);
     Http::assertSentCount(1);
     $customerLive = false;
-    $this->postJson('/api/billing/checkout', ['plan' => 'pro'])->assertStatus(503);
+    $this->postJson('/api/billing/checkout', ['plan' => 'pro', 'tos_accepted' => true])->assertStatus(503);
     $this->postJson('/api/billing/portal')->assertStatus(503);
     expect(Billing::plan($user->id))->toBe('free');
 });
@@ -414,7 +425,7 @@ test('checkout success_url includes CHECKOUT_SESSION_ID and checkout-status reco
         ]),
     ]);
 
-    $this->postJson('/api/billing/checkout', ['plan' => 'developer'])->assertOk()
+    $this->postJson('/api/billing/checkout', ['plan' => 'developer', 'tos_accepted' => true])->assertOk()
         ->assertJson(['url' => 'https://checkout.stripe.com/c/pay/cs_test_return123456']);
 
     Http::assertSent(fn ($req) => str_ends_with($req->url(), '/checkout/sessions')

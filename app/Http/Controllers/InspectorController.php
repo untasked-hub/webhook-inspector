@@ -19,36 +19,61 @@ use Inertia\Inertia;
 
 class InspectorController extends Controller
 {
+    private function paidPlanIntent(mixed $value): ?string
+    {
+        return is_string($value) && in_array($value, ['developer', 'pro', 'team'], true) ? $value : null;
+    }
+
+    private function authRedirectPath(string $base, ?string $plan): string
+    {
+        return $plan ? $base.'?plan='.rawurlencode($plan) : $base;
+    }
+
+    private function postAuthDestination(?string $plan): string
+    {
+        return $plan && Billing::enabled() ? '/billing/upgrade?plan='.rawurlencode($plan) : '/dashboard';
+    }
+
     public function authPage(Request $request)
     {
-        return Inertia::render('Auth', ['mode' => $request->is('register') ? 'register' : 'login']);
+        $plan = $this->paidPlanIntent($request->query('plan'));
+
+        return Inertia::render('Auth', [
+            'mode' => $request->is('register') ? 'register' : 'login',
+            'selected_plan' => $plan,
+            'selected_plan_name' => $plan ? config('billing.plans.'.$plan.'.name') : null,
+            'billing_enabled' => Billing::enabled(),
+            'billing_mode' => Billing::enabled() ? config('billing.stripe_mode') : null,
+        ]);
     }
 
     public function register(Request $request)
     {
+        $plan = $this->paidPlanIntent($request->input('plan'));
         $validator = \Illuminate\Support\Facades\Validator::make($request->all(), ['name' => 'required|string|max:80', 'email' => 'required|email|max:254|unique:users', 'password' => 'required|string|min:12|max:200|confirmed']);
         if ($validator->fails()) {
-            return redirect()->away('/register')->withErrors($validator)->withInput($request->except('password', 'password_confirmation'));
+            return redirect()->away($this->authRedirectPath('/register', $plan))->withErrors($validator)->withInput($request->except('password', 'password_confirmation'));
         }
         $data = $validator->validated();
         $user = User::create($data);
         Auth::login($user);
         $request->session()->regenerate();
-        return redirect()->away('/dashboard');
+        return redirect()->away($this->postAuthDestination($plan));
     }
 
     public function login(Request $request)
     {
+        $plan = $this->paidPlanIntent($request->input('plan'));
         $validator = \Illuminate\Support\Facades\Validator::make($request->all(), ['email' => 'required|email', 'password' => 'required|string|max:200']);
         if ($validator->fails()) {
-            return redirect()->away('/login')->withErrors($validator);
+            return redirect()->away($this->authRedirectPath('/login', $plan))->withErrors($validator);
         }
         $data = $validator->validated();
         if (! Auth::attempt($data)) {
-            return redirect()->away('/login')->withErrors(['email' => 'The email or password is incorrect.']);
+            return redirect()->away($this->authRedirectPath('/login', $plan))->withErrors(['email' => 'The email or password is incorrect.']);
         }
         $request->session()->regenerate();
-        return redirect()->away('/dashboard');
+        return redirect()->away($this->postAuthDestination($plan));
     }
 
     public function logout(Request $request)
@@ -72,6 +97,7 @@ class InspectorController extends Controller
         $roles = DB::table('project_memberships')->where('user_id', $request->user()->id)->pluck('role', 'project_id');
         $projects->each(function ($project) use ($request, $roles) {
             $project->role = $project->user_id === $request->user()->id ? 'owner' : $roles[$project->id];
+            $project->retention_limit = Billing::limits($project->user_id)['retention'];
             unset($project->user_id);
         });
         $endpoints = DB::table('endpoints')->whereIn('project_id', $projects->pluck('id'))->orderBy('id')->get();
@@ -112,14 +138,37 @@ class InspectorController extends Controller
 
     public function analytics(Request $request)
     {
-        $data = $request->validate(['days' => 'nullable|integer|min:1|max:90']);
+        $data = $request->validate([
+            'days' => 'nullable|integer|min:1|max:90',
+            'project_id' => 'nullable|integer|min:1',
+        ]);
         $days = (int) ($data['days'] ?? 14);
+        $projectId = isset($data['project_id']) ? (int) $data['project_id'] : null;
         $userId = $request->user()->id;
+        if ($projectId !== null) {
+            \App\Support\ProjectAccess::authorize($request, $projectId);
+        }
         $since = now()->startOfDay()->subDays($days - 1);
-        $endpoints = DB::table('endpoints')->join('projects', 'projects.id', '=', 'endpoints.project_id')->where('projects.user_id', $userId)
-            ->select('endpoints.id', 'endpoints.name', 'endpoints.retention_days', 'projects.name as project')->orderBy('endpoints.id')->get();
+        $memberRoles = DB::table('project_memberships')->where('user_id', $userId)->pluck('role', 'project_id');
+        $endpointsQuery = DB::table('endpoints')
+            ->join('projects', 'projects.id', '=', 'endpoints.project_id')
+            ->where(function ($q) use ($userId, $memberRoles) {
+                $q->where('projects.user_id', $userId);
+                if ($memberRoles->isNotEmpty()) {
+                    $q->orWhereIn('projects.id', $memberRoles->keys()->all());
+                }
+            });
+        if ($projectId !== null) {
+            $endpointsQuery->where('projects.id', $projectId);
+        }
+        $endpoints = $endpointsQuery
+            ->select('endpoints.id', 'endpoints.name', 'endpoints.retention_days', 'projects.id as project_id', 'projects.name as project', 'projects.user_id as owner_id')
+            ->orderBy('endpoints.id')
+            ->get();
         $ids = $endpoints->pluck('id');
-        $rows = DB::table('captures')->whereIn('endpoint_id', $ids)->where('received_at', '>=', $since)->get(['endpoint_id', 'received_at']);
+        $rows = $ids->isEmpty()
+            ? collect()
+            : DB::table('captures')->whereIn('endpoint_id', $ids)->where('received_at', '>=', $since)->get(['endpoint_id', 'received_at']);
         $daily = $rows->groupBy(fn ($r) => substr((string) $r->received_at, 0, 10))->map->count();
         $perEndpoint = $rows->groupBy('endpoint_id')->map->count();
         $series = [];
@@ -127,26 +176,45 @@ class InspectorController extends Controller
             $d = $since->copy()->addDays($i)->format('Y-m-d');
             $series[] = ['day' => $d, 'requests' => (int) ($daily[$d] ?? 0)];
         }
-        $deliveries = DB::table('deliveries')->whereIn('endpoint_id', $ids)->where('created_at', '>=', $since)
-            ->select('status', DB::raw('count(*) as total'))->groupBy('status')->pluck('total', 'status')->map(fn ($v) => (int) $v);
+        $deliveries = $ids->isEmpty()
+            ? collect()
+            : DB::table('deliveries')->whereIn('endpoint_id', $ids)->where('created_at', '>=', $since)
+                ->select('status', DB::raw('count(*) as total'))->groupBy('status')->pluck('total', 'status')->map(fn ($v) => (int) $v);
         $period = now()->format('Y-m');
         $limits = Billing::limits($userId);
+        $ownerRetention = [];
+        foreach ($endpoints->pluck('owner_id')->unique() as $ownerId) {
+            $ownerRetention[$ownerId] = Billing::limits((int) $ownerId)['retention'];
+        }
         return response()->json([
             'days' => $days,
+            'project_id' => $projectId,
             'daily' => $series,
-            'endpoints' => $endpoints->map(fn ($e) => ['id' => $e->id, 'name' => $e->name, 'project' => $e->project, 'retention_days' => $e->retention_days, 'requests' => (int) ($perEndpoint[$e->id] ?? 0)])->values(),
+            'endpoints' => $endpoints->map(fn ($e) => [
+                'id' => $e->id,
+                'project_id' => $e->project_id,
+                'name' => $e->name,
+                'project' => $e->project,
+                'role' => $e->owner_id === $userId ? 'owner' : ($memberRoles[$e->project_id] ?? 'viewer'),
+                'retention_days' => $e->retention_days,
+                'retention_limit' => $ownerRetention[$e->owner_id] ?? $limits['retention'],
+                'requests' => (int) ($perEndpoint[$e->id] ?? 0),
+            ])->values(),
             'deliveries' => (object) $deliveries->all(),
             'usage' => ['period' => $period, 'requests' => (int) DB::table('usage_counters')->where('user_id', $userId)->where('period', $period)->value('requests_count'), 'limit' => $limits['requests'], 'managed' => (bool) config('billing.managed')],
-            'note' => 'Daily and per-endpoint counts cover retained captures only; monthly usage counts every accepted request.',
+            'note' => 'Daily and per-endpoint counts cover retained captures across your owned and shared projects; monthly usage counts accepted requests billed to your account.',
         ])->header('Cache-Control', 'no-store');
     }
 
     public function createEndpoint(Request $request)
     {
-        $data = $request->validate(['project_id' => 'required|integer', 'name' => 'required|string|max:80', 'retention_days' => 'sometimes|integer|min:1|max:7']);
+        $data = $request->validate(['project_id' => 'required|integer', 'name' => 'required|string|max:80']);
         $project = \App\Support\ProjectAccess::authorize($request, $data['project_id'], true);
+        $maxRetention = Billing::limits((int) $project->user_id)['retention'];
+        $retentionData = $request->validate(['retention_days' => 'sometimes|integer|min:1|max:'.$maxRetention]);
         abort_if(DB::table('endpoints')->where('project_id', $project->id)->count() >= 20, 422, 'Endpoint limit reached.');
-        $id = DB::table('endpoints')->insertGetId(['project_id' => $project->id, 'name' => $data['name'], 'token' => Str::random(48), 'retention_days' => $data['retention_days'] ?? 7, 'created_at' => now(), 'updated_at' => now()]);
+        $defaultRetention = min(7, $maxRetention);
+        $id = DB::table('endpoints')->insertGetId(['project_id' => $project->id, 'name' => $data['name'], 'token' => Str::random(48), 'retention_days' => $retentionData['retention_days'] ?? $defaultRetention, 'created_at' => now(), 'updated_at' => now()]);
         return response()->json(['id' => $id], 201);
     }
 

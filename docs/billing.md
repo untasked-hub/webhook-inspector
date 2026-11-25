@@ -1,26 +1,45 @@
 # Managed billing deployment and verification
 
-Status: implementation exists, but no live Stripe credentials or successful payment verification are included in this source delivery. Do not advertise checkout as operational until the checklist below passes.
+Status: **Hosted Sandbox (Stripe Test Mode only) — live paid billing is not enabled.** Paid checkout on the hosted deployment uses Stripe Test Mode with test payment details only; no real payments are accepted. Live-mode cutover requires an explicit code change, live Vault secrets, and owner approval. Self-hosted deployments default to billing disabled and do not require Stripe.
 
-## Environment contract
+## Hosted Sandbox vs. self-hosted environment contract
 
-Set these in your deployment secret manager, never in git or a public Compose file:
+Set billing variables only in your deployment secret manager, never in git or a public Compose file.
+
+### Hosted Sandbox (Untasked managed deployment)
+
+The hosted deployment hard-locks `billing.stripe_mode` to `test` whenever platform storage (`UNTASKED_STORAGE_URL`) or any dedicated `STRIPE_TEST_*` variable is present (`config/billing.php`). Legacy `STRIPE_SECRET` / `STRIPE_LIVE_*` / `sk_live_*` inputs are ignored or rejected so live charging cannot be activated by an env flip alone.
 
 | Variable | Purpose |
 | --- | --- |
-| `MANAGED_HOSTING=true` | Enforce managed plan quotas and enable billing eligibility. Self-hosted core defaults to false and does not require Stripe. |
+| `STRIPE_TEST_SECRET_KEY` | Dedicated Stripe Sandbox/Test secret API key (`sk_test_...` or `rk_test_...`). Declared in `untasked.yaml` secrets. |
+| `STRIPE_TEST_WEBHOOK_SECRET` | Signing secret (`whsec_...`) for the hosted Sandbox webhook destination. |
+| `STRIPE_TEST_PRICE_DEVELOPER` | Recurring monthly Sandbox Developer price ID (`price_...`). |
+| `STRIPE_TEST_PRICE_PRO` | Recurring monthly Sandbox Pro price ID (`price_...`). |
+| `STRIPE_TEST_PRICE_TEAM` | Recurring monthly Sandbox Team price ID (`price_...`). |
+| `BILLING_CHECKOUT_ENABLED` | Optional kill switch. Set `false` to disable checkout, portal, and webhook endpoints (`503`) without disabling managed quotas. Defaults to enabled on hosted Sandbox only when all five `STRIPE_TEST_*` variables are present. |
+| `BILLING_ENABLED` | Optional override (`false` disables managed quotas/billing; self-hosted deployments default to `false`). |
+
+### Self-hosted / standalone operator deployment
+
+Self-hosted installations run with billing disabled by default (`MANAGED_HOSTING=false`) and include all core webhook capture, inspection, replay, and forwarding features without Stripe. Operators running their own managed instance without `UNTASKED_STORAGE_URL` or `STRIPE_TEST_*` use the standalone variable set:
+
+| Variable | Purpose |
+| --- | --- |
+| `MANAGED_HOSTING=true` | Enforce managed plan quotas and enable billing eligibility. |
+| `BILLING_CHECKOUT_ENABLED=true` | Explicitly enable checkout, portal, and webhook endpoints. |
 | `STRIPE_MODE` | Explicit `test` or `live`. Unset or invalid disables billing without disabling managed quotas. |
-| `STRIPE_SECRET` | Server-side Stripe secret API key. Its mode prefix must match `STRIPE_MODE`. Preview Compose maps the Vault name `STRIPE_SECRET_KEY` to this application variable and fixes mode to `test`. |
+| `STRIPE_SECRET` | Server-side Stripe secret API key. Its mode prefix must match `STRIPE_MODE`. |
 | `STRIPE_WEBHOOK_SECRET` | Signing secret for this deployment's Stripe webhook destination. |
 | `STRIPE_PRICE_DEVELOPER` | Recurring monthly Developer price ID. |
 | `STRIPE_PRICE_PRO` | Recurring monthly Pro price ID. |
 | `STRIPE_PRICE_TEAM` | Recurring monthly Team price ID. |
 
-Plan amounts and included usage are declared in `config/billing.php`. Create corresponding recurring prices in Stripe; the application does not create products or reconcile their currency/amount. Verify those values manually before enabling sales. `php artisan billing:preflight` checks explicit mode, API key prefix, signing-secret format and three distinct price IDs without contacting Stripe or printing values. Run `docker compose exec web php artisan billing:preflight` in the isolated preview. Exit 0 checks local configuration only; it does not verify credentials, price ownership or mode, the webhook destination, or portal setup. Inject the credentials and prices through the preview secret manager. Never copy live values into preview or use a candidate deployment that shares production data. Do not switch modes in a database that has billing records: use separate deployments, databases and Stripe settings for test and live. The hosted release manifest deliberately does not inject Stripe variables yet.
+Plan amounts and included usage are declared in `config/billing.php`. Create corresponding recurring prices in Stripe; the application does not create products or reconcile their currency/amount. Verify those values manually before enabling sales. `php artisan billing:preflight` checks explicit mode, API key prefix, signing-secret format and three distinct price IDs without contacting Stripe or printing values. Run `docker compose exec web php artisan billing:preflight` in the isolated preview. Exit 0 checks local configuration only; it does not verify credentials, price ownership or mode, the webhook destination, or portal setup. Inject the credentials and prices through the secret manager. Never copy live values into preview or use a candidate deployment that shares production data. Do not switch modes in a database that has billing records: use separate deployments, databases and Stripe settings for test and live.
 
 ## Provider setup
 
-Configure the public HTTPS destination `/stripe/webhook` (see `bootstrap/app.php`). Subscribe to `customer.subscription.created`, `customer.subscription.updated`, and `customer.subscription.deleted`. Enable Stripe's customer billing portal, including the intended cancellation and payment-method behavior. Checkout uses subscription mode and the authenticated account's customer; the portal is only available after a customer exists.
+Configure the public HTTPS destination `/stripe/webhook` (or alias `/billing/stripe/webhook`; see `bootstrap/app.php`). Subscribe to `customer.subscription.created`, `customer.subscription.updated`, and `customer.subscription.deleted`. Enable Stripe's customer billing portal, including the intended cancellation and payment-method behavior. Checkout uses subscription mode and the authenticated account's customer; the portal is only available after a customer exists.
 
 Outbound requests pin Stripe API `2025-03-31.basil`, which supports Checkout on accounts with Managed Payments enabled. Stripe's webhook destination API version is separate; the app uses the subscription ID from the signed event and reads the authoritative billing period from the single recognized plan item returned by the pinned API. A missing item period, unknown price, or multiple items does not grant paid entitlement.
 

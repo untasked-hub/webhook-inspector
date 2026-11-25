@@ -13,7 +13,11 @@ class ProjectTeamController extends Controller
     {
         ProjectAccess::authorize($request, $id, false, true);
         return response()->json([
-            'members' => DB::table('project_memberships')->where('project_id', $id)->orderBy('id')->get(['id', 'role', 'created_at']),
+            'members' => DB::table('project_memberships')
+                ->join('users', 'users.id', '=', 'project_memberships.user_id')
+                ->where('project_memberships.project_id', $id)
+                ->orderBy('project_memberships.id')
+                ->get(['project_memberships.id', 'users.name', 'project_memberships.role', 'project_memberships.created_at']),
             'invitations' => DB::table('project_invitations')->where('project_id', $id)->where('expires_at', '>', now())->get(['id', 'role', 'expires_at']),
         ])->header('Cache-Control', 'no-store');
     }
