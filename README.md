@@ -1,8 +1,11 @@
 # Webhook Inspector
 
-Inspect, debug and replay webhooks. This repository contains the Laravel/Vue source edition: authenticated projects and endpoints, encrypted capture, polling inspector, filtered history, bounded exports, queued replay and forwarding, delivery attempts, and scheduled retention. Treat receiver URLs and payloads as sensitive.
+Inspect, debug, and replay webhooks in seconds.
 
-**Status: development milestone, not production-ready.** Independent production deployment, provider billing, operational monitoring/backups, concurrency, browser accessibility and security require further end-to-end verification. Draft legal pages are not legal advice. See [implementation notes](IMPLEMENTATION-NOTES.md) for tested and untested behavior.
+- **Managed service:** The live hosted edition is available at [https://webhook-inspector.untasked.run](https://webhook-inspector.untasked.run).
+- **Self-hosted / source edition:** This repository contains the open-source Laravel/Vue application—authenticated projects and endpoints, encrypted capture, polling inspector, filtered history, bounded exports, queued replay and forwarding, delivery attempts, and scheduled retention. Treat receiver URLs and payloads as sensitive.
+
+**Self-host & deployment scope:** Independent self-hosted production deployments require operator setup and verification (external TLS, ingress, Postgres backups, `APP_KEY` management, monitoring, and any third-party billing credentials). Draft legal pages are templates, not legal advice. See [implementation notes](IMPLEMENTATION-NOTES.md) for tested and untested behavior.
 
 ## Self-host locally: capture your first webhook
 
@@ -44,7 +47,7 @@ This Compose file is a preview, **not** a turnkey hardened production deployment
 
 Bodies, captured headers/query and destination URLs are encrypted at rest. Redaction covers selected credential-like header and query names, not payload bodies or every secret: inspect exports before sharing. Replay preserves method, body, selected headers and sanitized captured query; credential headers and credential-like query parameters are not forwarded. Replay can have external side effects and requires explicit confirmation. Only public IPv4 `http`/`https` destinations on ports 80, 443, 8080 and 8443 are accepted. All IPv4 A answers must pass validation; dual-stack hosts use a validated public IPv4, IPv6-only hosts fail closed, the validated address is pinned at connection, and redirects are disabled. Query-bearing destination URLs are rejected. Review `app/Support/SafeHttp.php` and test in your environment before using with sensitive or untrusted workloads.
 
-History supports combined filters. JSON, NDJSON and cURL exports are limited to at most 100 matching retained captures per response and may contain sensitive payloads; use the history API cursor for older pages. Retention removes expired rows only while the scheduler is healthy. Self-hosted mode includes the core features without a paid subscription. Managed quotas are per account per UTC calendar month. Paid checkout is unavailable until a provider is configured and verified; configuration alone is not proof of a working payment integration.
+History supports combined filters. JSON, NDJSON and cURL exports are limited to at most 100 matching retained captures per response and may contain sensitive payloads; use the history API cursor for older pages. Retention removes expired rows only while the scheduler is healthy. Self-hosted mode includes the core features without a paid subscription. In managed deployments, usage quotas are enforced per account per UTC calendar month, and paid checkout/billing portal flows are enabled only when a payment provider is configured and verified (configuration alone is not proof of a live payment integration).
 
 ### Operational checks
 
