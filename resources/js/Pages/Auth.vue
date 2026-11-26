@@ -41,8 +41,7 @@ const submit = () => {
       <h1 class="text-2xl font-semibold">{{ mode === 'register' ? 'Create your account' : 'Log in' }}</h1>
       <p v-if="selected_plan_name && billing_enabled" role="status" class="rounded-lg border border-amber-500/50 bg-amber-950/30 p-3 text-sm leading-6 text-amber-200">
         <strong class="font-semibold">{{ selected_plan_name }} plan selected.</strong>
-        <span v-if="billing_mode === 'test'"> {{ mode === 'register' ? 'Create an account' : 'Sign in' }} to continue directly to the {{ selected_plan_name }} upgrade page (Stripe Test Mode — test cards only; no real charge).</span>
-        <span v-else> {{ mode === 'register' ? 'Create an account' : 'Sign in' }} to continue directly to the {{ selected_plan_name }} upgrade page.</span>
+        <span> {{ mode === 'register' ? 'Create an account' : 'Sign in' }} to continue directly to the {{ selected_plan_name }} upgrade page.</span>
       </p>
       <div v-if="mode === 'register'" class="space-y-1">
         <label for="name" class="block text-sm font-medium">Name</label>

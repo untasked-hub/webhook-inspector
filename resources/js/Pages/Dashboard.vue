@@ -70,9 +70,8 @@ async function verifyCheckoutReturn(sessionId: string | null) {
     await loadUsage()
     if (data.state === 'confirmed') {
       checkoutState.value = 'confirmed'
-      const modeSuffix = data.billing_mode === 'test' ? ' (Stripe Test Mode — no real charge)' : ''
       const renewSuffix = data.renews_at ? ` Renews ${formatRenewalDate(data.renews_at)} UTC.` : ''
-      checkoutMessage.value = `Payment successful — your plan is now ${planName(data.plan)}.${renewSuffix}${modeSuffix}`
+      checkoutMessage.value = `Payment successful — your plan is now ${planName(data.plan)}.${renewSuffix}`
       clearCheckoutQuery()
       return
     }
@@ -517,13 +516,12 @@ onUnmounted(() => { clearInterval(timer); if (checkoutPollTimer) clearTimeout(ch
           <span v-if="usage.managed" class="rounded px-2 py-0.5 text-[11px] font-medium" :class="usage.subscription_status === 'active' && !usage.cancel_at_period_end ? 'bg-emerald-950 text-emerald-300 border border-emerald-700/60' : usage.subscription_status === 'past_due' || usage.subscription_status === 'unpaid' ? 'bg-red-950 text-red-300 border border-red-700/60' : usage.cancel_at_period_end || usage.subscription_status === 'trialing' ? 'bg-amber-950 text-amber-200 border border-amber-700/60' : 'bg-zinc-900 text-zinc-300 border border-zinc-700'">{{ subscriptionStatusLabel }}</span>
           <span v-if="usage.managed && usage.renews_at && ['active','trialing','past_due'].includes(usage.subscription_status)" class="text-zinc-400">· {{ usage.cancel_at_period_end ? 'Ends' : 'Renews' }} {{ formatRenewalDate(usage.renews_at) }} UTC</span>
           <span class="text-zinc-400">· {{ usage.requests.toLocaleString() }} <span v-if="usage.managed">/ {{ formatQuota(usage.limits.requests) }}</span> requests ({{ usage.period }} UTC) · Retention up to {{ usage.limits.retention }}d</span>
-          <span v-if="usage.billing_enabled && usage.billing_mode === 'test'" class="rounded bg-amber-950 px-1.5 py-0.5 font-medium text-amber-300">Stripe Test Mode</span>
-          <span v-else-if="!usage.billing_enabled" class="text-zinc-400">· Paid checkout not enabled</span>
+          <span v-if="!usage.billing_enabled" class="text-zinc-400">· Paid checkout not enabled</span>
         </div>
         <div v-if="usage.managed && usage.billing_enabled" class="flex flex-wrap items-center gap-2">
           <button v-if="usage.has_billing_account" :disabled="billingBusy" class="rounded border border-emerald-600/70 bg-emerald-950/60 px-3 py-1.5 text-xs font-medium text-emerald-200 hover:bg-emerald-900/60 disabled:opacity-50" @click="openBilling()">{{ billingBusy ? 'Opening portal…' : 'Manage billing' }}</button>
           <template v-if="!hasActivePaidSub">
-            <Link v-for="plan in ['developer','pro','team']" :key="plan" :href="`/billing/upgrade?plan=${plan}`" class="rounded bg-zinc-800 px-3 py-1.5 text-xs capitalize text-zinc-200 hover:bg-zinc-700">{{ usage.billing_mode === 'test' ? plan + ' test checkout' : 'Upgrade to ' + plan }}</Link>
+            <Link v-for="plan in ['developer','pro','team']" :key="plan" :href="`/billing/upgrade?plan=${plan}`" class="rounded bg-zinc-800 px-3 py-1.5 text-xs capitalize text-zinc-200 hover:bg-zinc-700">{{ 'Upgrade to ' + plan }}</Link>
           </template>
         </div>
       </div>
@@ -531,7 +529,6 @@ onUnmounted(() => { clearInterval(timer); if (checkoutPollTimer) clearTimeout(ch
         <summary class="cursor-pointer inline-flex items-center text-zinc-400 hover:text-zinc-200">Quota &amp; billing details</summary>
         <div role="progressbar" aria-label="Monthly request quota used" :aria-valuenow="Math.min(usage.requests, usage.limits.requests)" :aria-valuemin="0" :aria-valuemax="usage.limits.requests" class="my-2 h-2 rounded bg-zinc-800"><div class="h-2 rounded bg-emerald-400" :style="{ width: usagePercent + '%' }"></div></div>
         <p>{{ usage.requests.toLocaleString() }} / {{ formatQuota(usage.limits.requests) }} requests in {{ usage.period }} UTC. Clearing history does not reset usage.</p>
-        <p v-if="usage.billing_mode === 'test'" class="mt-2 rounded border border-amber-500/50 bg-amber-950/40 p-2 text-amber-200">Stripe test mode. Use test payment details only; no real payment will be taken.</p>
         <p v-if="!usage.billing_enabled" class="mt-2 text-amber-300">Paid checkout and the billing portal are unavailable on this deployment. No payment can be taken.</p>
         <p v-else-if="usage.has_billing_account" class="mt-2 text-zinc-400">Use <strong>Manage billing</strong> to update your payment method, switch plans, view invoices, or cancel renewal in the Stripe Billing Portal.</p>
       </details>

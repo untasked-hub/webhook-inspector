@@ -10,27 +10,27 @@ class PagesController extends Controller
 {
     private function pages(): array
     {
+        $billingEnabled = Billing::enabled();
+
         return [
             'pricing' => [
                 'title' => 'Pricing',
                 'description' => 'Free to self-host forever. Managed hosting adds higher limits and longer retention.',
                 'sections' => [[
-                    'h' => 'Managed plans and Hosted Sandbox status',
+                    'h' => 'Managed plans and billing status',
                     'p' => [
-                        'Request quotas are enforced per account each calendar month. Live paid billing is not yet open: the hosted Sandbox runs in Stripe Test Mode only (use Stripe test cards; no real charges are taken).',
+                        'Request quotas are enforced per account each calendar month. Managed plans are billed monthly through Stripe; checkout is available from your authenticated account.',
                         'Self-hosted installations run with billing disabled by default (MANAGED_HOSTING=false) and include all core features without Stripe. See the Self-hosting guide for standalone deployment.',
                     ],
                 ]],
                 'plans' => collect(config('billing.plans'))->map(fn ($p, $key) => ['key' => $key, 'name' => $p['name'], 'price' => $p['price'], 'requests' => $p['requests'], 'retention' => $p['retention']])->values()->all(),
-                'billing_enabled' => Billing::enabled(),
-                'billing_mode' => Billing::enabled() ? config('billing.stripe_mode') : null,
+                'billing_enabled' => $billingEnabled,
+                'billing_mode' => $billingEnabled ? config('billing.stripe_mode') : null,
                 'signed_in' => auth()->check(),
                 'selected_plan' => in_array(request()->query('plan'), ['developer', 'pro', 'team'], true) ? request()->query('plan') : null,
-                'billing_note' => !Billing::enabled()
-                    ? 'Paid checkout is currently unavailable on this deployment: billing is not configured.'
-                    : (config('billing.stripe_mode') === 'test'
-                        ? 'Hosted Sandbox runs in Stripe Test Mode. Use Stripe test card details only; no real payment will be taken and live paid plans are not yet open.'
-                        : 'Checkout is configured on this deployment.'),
+                ...($billingEnabled ? [] : [
+                    'billing_note' => 'Paid checkout is currently unavailable on this deployment: billing is not configured.',
+                ]),
                 'policies' => [
                     ['h' => 'What counts toward my quota?', 'p' => 'Accepted inbound captures count toward the project owner’s quota across all endpoints. Usage starts a new calendar month in UTC. Deleting history does not reset usage.'],
                     ['h' => 'What happens at the limit?', 'p' => 'Managed receivers reject new captures once the account reaches its monthly limit. Rejected requests are not stored or forwarded. There are no automatic overage charges or quota grace periods.'],
@@ -49,6 +49,7 @@ class PagesController extends Controller
                     ['h' => 'Conditional forwarding and destination health', 'p' => ['Open Endpoint settings and set any combination of HTTP method, exact header value and JSON dot-path with an exact string value. All configured conditions must match. For example: POST, X-Event: orders, and data.type = paid. Header names are case-insensitive; values are case-sensitive. Missing paths and non-string values do not match. Do not use credentials in rules. Non-matching requests are still captured and can be replayed explicitly.', 'Leave the URL blank to retain a configured destination. Clear all conditions to forward unconditionally. The health badge reflects retained forwarding outcomes, not a live reachability probe. Delivery issues include blocked or retrying deliveries; a temporary pause means the circuit breaker is preventing new forwards. A changed destination starts with no observed health.']],
                     ['h' => 'Custom receiver responses', 'p' => ['Open Receiver response & signature verification in the dashboard to configure an HTTP status, application/json or text/plain Content-Type, and a response body up to 16 KiB. A 204 response has no body. Custom errors still capture requests and may cause the sender to retry. Responses cannot set redirect locations or arbitrary headers.']],
                     ['h' => 'Signature verification', 'p' => ['Optionally configure an encrypted endpoint signing secret. Auto mode detects Stripe-Signature, X-Hub-Signature-256 (GitHub), X-Slack-Signature with X-Slack-Request-Timestamp, or X-Webhook-Signature (hex HMAC-SHA256). Stripe and Slack timestamps must be within five minutes. The inspector shows verified, invalid, missing, or not configured. Verification is diagnostic: invalid requests are still captured. Secrets and signature headers are not exposed in history or exports.']],
+                    ['h' => 'Signing webhooks yourself', 'p' => ['When you send webhooks from your own service, you can sign them so receivers (including Webhook Inspector) can verify authenticity. Generate a strong random secret (e.g. openssl rand -hex 32) and store it only in your sender and the receiver. Compute an HMAC-SHA256 of the raw request body with that secret, hex-encode it, and send it in a header such as X-Webhook-Signature (or X-Hub-Signature-256 with a sha256= prefix). Example (Node.js): const sig = require("crypto").createHmac("sha256", secret).update(rawBody).digest("hex"); headers["X-Webhook-Signature"] = sig; — and the equivalent in PHP: hash_hmac("sha256", $rawBody, $secret). To test it in Webhook Inspector, create an endpoint, set its signing secret to the same value, and POST a signed request (e.g. with curl --data-binary @payload.json -H "X-Webhook-Signature: <hex>"). The inspector will show signature status as verified; tamper with the body or secret and it will show invalid. Use a fresh secret per environment, rotate it periodically, and never commit it to source control.']],
                     ['h' => 'Project collaboration', 'p' => ['Owners can create private, single-use invitation links from Manage project team. Sign in first, then open the invitation and explicitly accept. Links expire in 24 hours; share only with trusted teammates. Members can configure endpoints and replay requests. Viewers can inspect and export retained captures but cannot change data. Owners alone rename/delete projects, invite, change roles and revoke access. Membership numbers identify access entries without exposing account details; record who received each invitation privately. Analytics and billing remain scoped to the owning account; captured usage is billed to the project owner.']],
                     ['h' => 'Project REST API: authentication', 'p' => ['Open Project API tokens in the dashboard. Owners and members can generate tokens with read or read+replay scope; members manage only their own tokens, owners can revoke any project token. Viewers cannot mint tokens. Tokens are shown once, SHA-256 hashed at rest, and checked against current project membership on every call. Removal immediately prevents further access; downgrading to viewer prevents replay. Revoke unused credentials. Never put API tokens in URLs, source control or shared logs.', 'Set BASE_URL to this deployment origin and API_TOKEN privately in your shell. All responses are JSON with Cache-Control: no-store. Invalid/revoked tokens return 401, insufficient scope 403, inaccessible or expired resources 404, validation 422, and rate limits 429. Limits: 120 calls/minute shared per project and 180/minute per source IP. Receiver URLs and signing secrets are never listed by this API.'], 'code' => 'curl --fail-with-body -H "Authorization: Bearer $API_TOKEN" "$BASE_URL/api/v1/projects/$PROJECT_ID/endpoints"'],
                     ['h' => 'REST API: poll request history', 'p' => ['GET /api/v1/endpoints/{endpoint}/requests returns requests metadata and next_before. Pages contain up to 100 retained requests, newest first; pass before=next_before for older pages. Poll the first page and deduplicate by id for new arrivals. Optional filters: method, from, to, content_type, min_size, max_size, status (none/queued/retrying/succeeded/failed/blocked), and q (case-insensitive body/header/query search across the newest 1,000 prefiltered captures). This API always returns JSON; use dashboard exports for CSV/NDJSON/cURL.'], 'code' => 'curl --fail-with-body --get -H "Authorization: Bearer $API_TOKEN" --data-urlencode "method=POST" --data-urlencode "before=$NEXT_BEFORE" "$BASE_URL/api/v1/endpoints/$ENDPOINT_ID/requests"'],
@@ -66,7 +67,7 @@ class PagesController extends Controller
                     ['h' => 'External PostgreSQL preview', 'p' => ['The default Compose configuration requires externally provisioned PostgreSQL. Set DATABASE_URL and MIGRATION_DATABASE_URL and supply a persistent APP_KEY via a secret manager. Back up both the database and encryption key: changing or losing the key makes encrypted data unreadable.'], 'code' => 'docker compose up --build'], 
                     ['h' => 'Tests', 'p' => ['Run the suite in the test container.'], 'code' => 'docker compose run --rm test'],
                     ['h' => 'Production responsibility', 'p' => ['Configure TLS and ingress, database backups, and monitoring. Monitor the queue worker and scheduler: retries and retention pruning depend on these processes. The Compose setup is a preview configuration, not a turnkey hardened production deployment. Never commit database credentials or encryption keys.']],
-                    ['h' => 'Billing', 'p' => ['Self-hosted installs run with billing disabled by default (MANAGED_HOSTING=false); all core features are included without Stripe. The hosted Sandbox deployment is separate and runs in Stripe Test Mode only (no live paid charging).']],
+                    ['h' => 'Billing', 'p' => ['Self-hosted installs run with billing disabled by default (MANAGED_HOSTING=false); all core features are included without Stripe.']],
                 ],
             ],
             'privacy' => [

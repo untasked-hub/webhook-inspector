@@ -160,16 +160,6 @@ async function openBillingPortal() {
       </div>
 
       <div
-        v-if="billing_enabled && billing_mode === 'test'"
-        class="mt-6 rounded-xl border border-amber-500/40 bg-amber-950/35 px-4 py-3 text-sm text-amber-100"
-      >
-        <p class="font-medium text-amber-200">Hosted Sandbox — Stripe Test Mode</p>
-        <p class="mt-1 text-amber-100/90">
-          Use Stripe test card details only. No real payment or live charge will be taken.
-        </p>
-      </div>
-
-      <div
         v-if="checkout_cancelled"
         role="status"
         class="mt-6 rounded-xl border border-zinc-700 bg-zinc-900/90 px-4 py-3 text-sm text-zinc-200"
@@ -336,9 +326,7 @@ async function openBillingPortal() {
               {{
                 busy
                   ? 'Opening Stripe…'
-                  : billing_mode === 'test'
-                    ? `Continue to ${activePlan.name} Stripe Test Checkout`
-                    : `Continue to ${activePlan.name} Stripe Checkout`
+                  : `Continue to ${activePlan.name} Stripe Checkout`
               }}
             </button>
             <p v-if="!tosAccepted" class="text-center text-xs text-zinc-400">

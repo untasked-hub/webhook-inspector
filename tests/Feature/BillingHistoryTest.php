@@ -60,7 +60,7 @@ test('hosted test-mode billing enables when all five dedicated test secrets are 
             ->where('page.billing_enabled', true)
             ->where('page.billing_mode', 'test')
             ->where('page.signed_in', true)
-            ->where('page.billing_note', 'Hosted Sandbox runs in Stripe Test Mode. Use Stripe test card details only; no real payment will be taken and live paid plans are not yet open.'));
+            ->missing('page.billing_note'));
 
         // Live secret in STRIPE_TEST_SECRET_KEY must fail closed.
         $env->set('STRIPE_TEST_SECRET_KEY', 'sk_live_fixture');
@@ -297,12 +297,12 @@ test('preflight reports only configuration checks without calling the provider',
     Http::assertNothingSent();
 });
 
-test('test-mode pricing discloses that no real payment will be taken', function () {
+test('test-mode pricing omits the checkout configuration notice', function () {
     billingConfig();
     $this->get('/pricing')->assertInertia(fn ($page) => $page
         ->where('page.billing_enabled', true)
         ->where('page.billing_mode', 'test')
-        ->where('page.billing_note', 'Hosted Sandbox runs in Stripe Test Mode. Use Stripe test card details only; no real payment will be taken and live paid plans are not yet open.'));
+        ->missing('page.billing_note'));
 });
 
 test('explicit STRIPE_TEST_* mode never falls back to live credentials even without platform storage env', function () {

@@ -10,7 +10,7 @@ test('pricing page discloses billing-disabled state cleanly in self-host/default
     test.skip(true, 'Preview server is running in Hosted Sandbox Stripe Test Mode.')
     return
   }
-  await expect(page.getByText('Paid checkout is currently unavailable on this deployment')).toBeVisible()
+  await expect(page.getByRole('status').filter({ hasText: 'Paid checkout is currently unavailable on this deployment' })).toHaveText('Paid checkout is currently unavailable on this deployment: billing is not configured. No payment will be taken.')
   await expect(page.getByRole('button', { name: 'Checkout unavailable' })).toHaveCount(3)
   await expect(page.getByRole('link', { name: 'Start free', exact: true }).last()).toHaveAttribute('href', '/register')
 

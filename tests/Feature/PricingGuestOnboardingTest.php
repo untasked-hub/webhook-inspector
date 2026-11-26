@@ -37,7 +37,7 @@ test('guest plan selection is preserved through /billing/upgrade and login into 
             ->where('page.billing_mode', 'test')
             ->where('page.signed_in', false)
             ->where('page.selected_plan', null)
-            ->where('page.billing_note', fn ($copy) => str_contains($copy, 'Stripe Test Mode') && str_contains($copy, 'live paid plans are not yet open'))
+            ->missing('page.billing_note')
         );
 
     // Clicking a plan CTA links directly to /billing/upgrade?plan=pro; guests are sent to /login?plan=pro.

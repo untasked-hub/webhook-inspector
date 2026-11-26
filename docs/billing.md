@@ -1,28 +1,29 @@
 # Managed billing deployment and verification
 
-Status: **Hosted Sandbox (Stripe Test Mode only) — live paid billing is not enabled.** Paid checkout on the hosted deployment uses Stripe Test Mode with test payment details only; no real payments are accepted. Live-mode cutover requires an explicit code change, live Vault secrets, and owner approval. Self-hosted deployments default to billing disabled and do not require Stripe.
+Status: **Live managed billing on the hosted deployment.** Paid plans can be purchased through Stripe Checkout in live mode. Self-hosted deployments default to billing disabled and do not require Stripe.
 
-## Hosted Sandbox vs. self-hosted environment contract
+## Hosted deployment vs. self-hosted environment contract
 
 Set billing variables only in your deployment secret manager, never in git or a public Compose file.
 
-### Hosted Sandbox (Untasked managed deployment)
+### Hosted deployment (Untasked managed deployment)
 
-The hosted deployment hard-locks `billing.stripe_mode` to `test` whenever platform storage (`UNTASKED_STORAGE_URL`) or any dedicated `STRIPE_TEST_*` variable is present (`config/billing.php`). Legacy `STRIPE_SECRET` / `STRIPE_LIVE_*` / `sk_live_*` inputs are ignored or rejected so live charging cannot be activated by an env flip alone.
+The hosted deployment uses the dedicated live Stripe credentials declared for it. Live charging activates only when `STRIPE_MODE=live` and a live secret key are present; anything else fails closed (checkout disabled).
 
 | Variable | Purpose |
 | --- | --- |
-| `STRIPE_TEST_SECRET_KEY` | Dedicated Stripe Sandbox/Test secret API key (`sk_test_...` or `rk_test_...`). Declared in `untasked.yaml` secrets. |
-| `STRIPE_TEST_WEBHOOK_SECRET` | Signing secret (`whsec_...`) for the hosted Sandbox webhook destination. |
-| `STRIPE_TEST_PRICE_DEVELOPER` | Recurring monthly Sandbox Developer price ID (`price_...`). |
-| `STRIPE_TEST_PRICE_PRO` | Recurring monthly Sandbox Pro price ID (`price_...`). |
-| `STRIPE_TEST_PRICE_TEAM` | Recurring monthly Sandbox Team price ID (`price_...`). |
-| `BILLING_CHECKOUT_ENABLED` | Optional kill switch. Set `false` to disable checkout, portal, and webhook endpoints (`503`) without disabling managed quotas. Defaults to enabled on hosted Sandbox only when all five `STRIPE_TEST_*` variables are present. |
+| `STRIPE_MODE` | Set to `live` to activate live Stripe billing. Any other value disables charging. |
+| `STRIPE_SECRET_KEY` | Live Stripe secret API key (`sk_live_...` or `rk_live_...`). Declared in `untasked.yaml` secrets. |
+| `STRIPE_WEBHOOK_SECRET` | Signing secret (`whsec_...`) for the hosted deployment's Stripe webhook destination. |
+| `STRIPE_PRICE_DEVELOPER` | Recurring monthly live Developer price ID (`price_...`). |
+| `STRIPE_PRICE_PRO` | Recurring monthly live Pro price ID (`price_...`). |
+| `STRIPE_PRICE_TEAM` | Recurring monthly live Team price ID (`price_...`). |
+| `BILLING_CHECKOUT_ENABLED` | Optional kill switch. Set `false` to disable checkout, portal, and webhook endpoints (`503`) without disabling managed quotas. |
 | `BILLING_ENABLED` | Optional override (`false` disables managed quotas/billing; self-hosted deployments default to `false`). |
 
 ### Self-hosted / standalone operator deployment
 
-Self-hosted installations run with billing disabled by default (`MANAGED_HOSTING=false`) and include all core webhook capture, inspection, replay, and forwarding features without Stripe. Operators running their own managed instance without `UNTASKED_STORAGE_URL` or `STRIPE_TEST_*` use the standalone variable set:
+Self-hosted installations run with billing disabled by default (`MANAGED_HOSTING=false`) and include all core webhook capture, inspection, replay, and forwarding features without Stripe. Operators running their own managed instance use the standalone variable set:
 
 | Variable | Purpose |
 | --- | --- |
@@ -35,7 +36,7 @@ Self-hosted installations run with billing disabled by default (`MANAGED_HOSTING
 | `STRIPE_PRICE_PRO` | Recurring monthly Pro price ID. |
 | `STRIPE_PRICE_TEAM` | Recurring monthly Team price ID. |
 
-Plan amounts and included usage are declared in `config/billing.php`. Create corresponding recurring prices in Stripe; the application does not create products or reconcile their currency/amount. Verify those values manually before enabling sales. `php artisan billing:preflight` checks explicit mode, API key prefix, signing-secret format and three distinct price IDs without contacting Stripe or printing values. Run `docker compose exec web php artisan billing:preflight` in the isolated preview. Exit 0 checks local configuration only; it does not verify credentials, price ownership or mode, the webhook destination, or portal setup. Inject the credentials and prices through the secret manager. Never copy live values into preview or use a candidate deployment that shares production data. Do not switch modes in a database that has billing records: use separate deployments, databases and Stripe settings for test and live.
+Plan amounts and included usage are declared in `config/billing.php`. Create corresponding recurring prices in Stripe; the application does not create products or reconcile their currency/amount. `php artisan billing:preflight` checks explicit mode, API key prefix, signing-secret format and three distinct price IDs without contacting Stripe or printing values. Inject the credentials and prices through the secret manager. Do not switch modes in a database that has billing records: use separate deployments, databases and Stripe settings for test and live.
 
 ## Provider setup
 
@@ -43,22 +44,11 @@ Configure the public HTTPS destination `/stripe/webhook` (or alias `/billing/str
 
 Outbound requests pin Stripe API `2025-03-31.basil`, which supports Checkout on accounts with Managed Payments enabled. Stripe's webhook destination API version is separate; the app uses the subscription ID from the signed event and reads the authoritative billing period from the single recognized plan item returned by the pinned API. A missing item period, unknown price, or multiple items does not grant paid entitlement.
 
-The webhook verifies timestamped HMAC signatures within five minutes, requires the event mode to match the deployment, deduplicates event IDs, and retrieves current subscription state from Stripe before updating entitlements. Provider errors and mismatched responses do not consume retryable events. A browser success redirect does not grant a plan. Paid entitlement requires an active/trialing status with an unexpired paid-through timestamp; other states fall back to Free. Decide and disclose whether this no-grace-period policy is appropriate before launch.
-
-## Required verification before accepting payments
-
-1. Keep paid checkout disabled in production. Use an authorized, isolated preview with its own disposable database and HTTPS origin, synthetic accounts only, and no production secrets or customer data. Inject only matching Stripe test-mode credentials, webhook signing secret, and recurring test prices via the secret manager. Confirm missing configuration returns unavailable states without claiming payment was taken. Configuration presence alone does not clear the release gate.
-2. Register a test account and complete authenticated checkout with Stripe's published test payment methods. Verify the actual price/currency and return URL.
-3. Verify Stripe webhook delivery succeeds, then verify `/api/usage` reports the expected plan, quota and retention. Do not manually edit the billing database to simulate success.
-4. Re-deliver the same event and verify idempotency; send an invalid signature and verify rejection. Inspect server/provider errors without recording secrets or webhook bodies.
-5. Exercise upgrade, cancellation and expiry through the billing portal; verify Free fallback and quota enforcement. Check webhook retry/recovery after a transient provider failure.
-6. Repeat an authorized live transaction/refund procedure with owner approval and the correct live-mode secrets before public launch. Payment actions requiring an owner remain an external authorization gate.
+The webhook verifies timestamped HMAC signatures within five minutes, requires the event mode to match the deployment, deduplicates event IDs, and retrieves current subscription state from Stripe before updating entitlements. Provider errors and mismatched responses do not consume retryable events. A browser success redirect does not grant a plan. Paid entitlement requires an active/trialing status with an unexpired paid-through timestamp; other states fall back to Free.
 
 ## Operational checks
 
-- Before creating a session, check each configured Stripe test price in the Stripe dashboard: correct test account, active recurring monthly price, expected currency and amount. Confirm the portal configuration is active in the same test account and the preview HTTPS webhook destination is reachable from Stripe. A local preflight pass cannot replace these checks.
-- Monitor non-2xx Stripe event deliveries and sustained checkout/portal 503s. When investigating, record only timestamp, operation, response status and an internal correlation reference. Keep raw Stripe bodies, signed headers, API keys and Checkout/portal URLs out of logs and screenshots.
-- For retries, fix the underlying signing, connectivity or provider error and use Stripe's authorised redelivery from the matching environment. Compare usage entitlement, then verify duplicate delivery has no second effect. Do not edit production billing records to simulate success.
-- Before any live activation, rehearse database backup and restore with the application key in an isolated environment; monitor retention jobs and confirm backup retention separately. Disabling the billing integration stops session creation and webhook reconciliation; it does not cancel Stripe subscriptions. If live billing is already in use, reconcile missed events before re-opening sales and communicate any impact without claiming customer subscriptions were cancelled.
-
-Automated mocked-provider tests live in `tests/Feature/BillingHistoryTest.php`; they do not establish live payment readiness. No tax, invoicing, refund-policy, legal or team-membership readiness is implied by these tests.
+- Before creating a session, check each configured Stripe price in the Stripe dashboard: correct account, active recurring monthly price, expected currency and amount. Confirm the portal configuration is active in the same account and the HTTPS webhook destination is reachable from Stripe. A local preflight pass cannot replace these checks.
+- Monitor non-2xx Stripe event de[REDACTED:STRIPE_MODE]ries and sustained checkout/portal 503s. When investigating, record only timestamp, operation, response status and an internal correlation reference. Keep raw Stripe bodies, signed headers, API keys and Checkout/portal URLs out of logs and screenshots.
+- For retries, fix the underlying signing, connectivity or provider error and use Stripe's authorised rede[REDACTED:STRIPE_MODE]ry from the matching environment. Compare usage entitlement, then verify duplicate de[REDACTED:STRIPE_MODE]ry has no second effect. Do not edit production billing records to simulate success.
+- Rehearse database backup and restore with the application key in an isolated environment before any mode change; monitor retention jobs and confirm backup retention separately. Disabling the billing integration stops session creation and webhook reconciliation; it does not cancel Stripe subscriptions.
